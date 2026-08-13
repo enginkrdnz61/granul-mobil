@@ -1,0 +1,14 @@
+{
+  "name": "Granül Üretim Maliyet Sistemi (Mobil)",
+  "short_name": "Granül Maliyet",
+  "description": "Fabrika üretim/stok/maliyet verilerinin salt-okunur mobil görünümü",
+  "start_url": "./mobile.html",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#22262b",
+  "theme_color": "#22262b",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
