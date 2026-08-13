@@ -7,7 +7,7 @@
 
   // ÖNEMLİ: Bu satırı, Google Cloud Console'da oluşturduğunuz OAuth Client ID ile değiştirin.
   // Kurulum talimatları için ayrı olarak paylaşılan "MOBIL-KURULUM.md" dosyasına bakın.
-  var GOOGLE_CLIENT_ID = 'BURAYA_KENDI_GOOGLE_CLIENT_ID_DEGERINIZI_YAZIN.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '700097654718-cj57v8ikbmiq3e566dohtjv65rqolkbh.apps.googleusercontent.com';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
   var LS_DOSYA_ID_ANAHTARI = 'granulMaliyet_driveDosyaId';
 
