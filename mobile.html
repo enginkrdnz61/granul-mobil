@@ -154,9 +154,52 @@
     #print-area h2{ color:#000; font-size:13px; margin:14px 0 6px; }
   }
   ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:6px; }
+
+  /* ============================================================
+     MOBİL EKRANA ÖZEL DÜZENLEMELER (sadece bu dosyada, masaüstü index.html'de YOK) — dar
+     ekranlarda sabit 230px'lik yan menü çok yer kaplayıp her şeyi sıkıştırdığı için, yan menüyü
+     "kaydırmalı gizli menü" (hamburger) haline getirir, tabloları/kartları tek sütuna indirir,
+     yazı boyutlarını küçültür.
+     ============================================================ */
+  @media (max-width: 780px){
+    #mobil_menu_btn{ display:flex !important; }
+    .shell{ display:block; }
+    .birim-sidebar{
+      position:fixed; top:0; left:0; height:100vh; z-index:150; width:250px;
+      transform:translateX(-100%); transition:transform .22s ease; box-shadow:3px 0 22px rgba(0,0,0,.45);
+    }
+    body.mobil-menu-acik .birim-sidebar{ transform:translateX(0); }
+    body.mobil-menu-acik #mobil_menu_backdrop{ display:block; }
+    .app-area{ width:100%; height:100vh; }
+    .app{ padding:64px 12px 40px; max-width:100%; }
+    .topbar{ gap:10px; }
+    .topbar h1{ font-size:16px; }
+    .topbar .sub{ font-size:11px; }
+    .whoami{ font-size:11px; }
+    nav.tabs{ top:0; }
+    nav.tabs button{ padding:9px 11px; font-size:12.5px; }
+    .grid-3, .grid-2{ grid-template-columns:1fr; gap:10px; }
+    .card{ padding:13px; overflow-x:auto; }
+    .stat{ font-size:21px; }
+    table{ font-size:11px; min-width:520px; }
+    th, td{ padding:6px 7px; }
+    .row{ flex-direction:column; gap:0; }
+    .toolbar{ gap:8px; }
+    .toolbar .field{ min-width:0; width:100%; }
+    .modal{ max-width:94vw; padding:16px; }
+    .section-title{ font-size:13px; margin:16px 0 8px; }
+  }
+  @media (min-width: 781px){
+    #mobil_menu_btn, #mobil_menu_backdrop{ display:none !important; }
+  }
 </style>
 </head>
 <body>
+<!-- Hamburger menü butonu ve arka plan karartması: BİLEREK #root'un DIŞINDA duruyor — app.js her
+     ekran değişiminde #root'un içeriğini TAMAMEN YENİDEN YAZIYOR, eğer bu buton #root'un içinde
+     olsaydı her ekran değişiminde silinip kaybolurdu. Sadece dar ekranlarda (yukarıdaki CSS ile) görünür. -->
+<button id="mobil_menu_btn" aria-label="Menü" style="display:none; position:fixed; top:12px; left:12px; z-index:200; width:42px; height:42px; border-radius:9px; background:var(--panel); border:1px solid var(--line); color:var(--text); font-size:20px; align-items:center; justify-content:center; cursor:pointer;">☰</button>
+<div id="mobil_menu_backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:120;"></div>
 <!-- MOBIL_SALT_OKUNUR bayrağı, app.js YÜKLENMEDEN ÖNCE ayarlanmalı — aksi halde app.js kendi
      sonundaki otomatik boot() çağrısını (Electron masaüstü davranışı) hemen çalıştırır, ama
      mobilde henüz Google Drive'dan veri inmemiş olur. Bu yüzden bu satır, diğer TÜM script
@@ -171,6 +214,24 @@
 <script src="web-api.js"></script>
 <script src="app.js"></script>
 <script src="mobile-bootstrap.js"></script>
+<script>
+  // Hamburger menü aç/kapa. document'e bağlı (app.js'in #root'u yeniden yazmasından ETKİLENMEZ).
+  (function(){
+    var menuBtn = document.getElementById('mobil_menu_btn');
+    var backdrop = document.getElementById('mobil_menu_backdrop');
+    function menuKapat(){ document.body.classList.remove('mobil-menu-acik'); }
+    menuBtn.addEventListener('click', function(){ document.body.classList.toggle('mobil-menu-acik'); });
+    backdrop.addEventListener('click', menuKapat);
+    // Yan menüdeki bir birime/butona tıklanınca menüyü otomatik kapat (ekran değişikliği zaten
+    // gerçekleşiyor, açık kalmasının bir anlamı yok). Olay yakalama (delegation) document'e
+    // bağlandığı için app.js'in yan menüyü yeniden çizmesinden etkilenmez.
+    document.addEventListener('click', function(ev){
+      if(ev.target.closest && ev.target.closest('.birim-sidebar')){
+        setTimeout(menuKapat, 180);
+      }
+    });
+  })();
+</script>
 <script>
   // PWA yüklenebilirliği (Ana Ekrana Ekle) için basit bir servis çalışanı kaydı.
   if('serviceWorker' in navigator){
