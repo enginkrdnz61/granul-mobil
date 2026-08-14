@@ -950,6 +950,7 @@ function tabListDahili(){
     if(izinVar('aylik')) tabs.push({id:'aylik', label:'Aylık Rapor'});
     if(izinVar('personel')) tabs.push({id:'personel', label:'Personel'});
     if(izinVar('stok')) tabs.push({id:'stok', label:'Stok'});
+    if(izinVar('stok')) tabs.push({id:'stokmaliyet', label:'Stok Maliyetleri'});
     if(izinVar('parametreler')) tabs.push({id:'parametreler', label:'Parametreler'});
     if(isAdmin()) tabs.push({id:'onaybekleyenler', label:onayBekleyenlerEtiket()});
     if(isMudur()) tabs.push({id:'onaydurumum', label:onayDurumEtiketi()});
@@ -1265,6 +1266,7 @@ function renderTabContent(){
     if(activeTab==='aylik') return renderGenelFabrikaAylikRapor(c);
     if(activeTab==='personel') return renderGenelFabrikaPersonel(c);
     if(activeTab==='stok') return renderGenelFabrikaStok(c);
+    if(activeTab==='stokmaliyet') return renderGenelFabrikaStokMaliyet(c);
     if(activeTab==='parametreler') return renderGenelFabrikaParametreler(c);
     if(activeTab==='ayarlar') return renderAyarlar(c);
     return;
@@ -1587,6 +1589,27 @@ function tumUrunlerBirlesik(veri){
 }
 
 var stokAltSekme = 'tumu'; // 'tumu' | birim.id — hangi birimin stoğu tek başına gösteriliyor
+var stokMaliyetAltSekme = null; // "Stok Maliyetleri" sekmesinde seçili birim.id — "Tümü" YOKTUR, her zaman TEK bir birim seçilidir
+
+// Stok + Ortalama Maliyet (TL/birim) + Toplam Değer (TL) gösteren tablo — stokTablosuHTML'in
+// maliyet bilgili versiyonu. maliyetFn(cinsAdi) o cinsin TL/birim maliyetini döndürmelidir.
+function stokMaliyetTablosuHTML(cinsListesi, ozetMap, maliyetFn, birimEtiketi){
+  if(cinsListesi.length===0) return '<div class="empty">Henüz cins tanımlı değil.</div>';
+  var toplamDeger = 0;
+  var satirlar = cinsListesi.map(function(p){
+    var stok = ozetMap[p.ad] || 0;
+    var maliyet = maliyetFn(p.ad);
+    var deger = stok * maliyet;
+    toplamDeger += deger;
+    return '<tr><td class="txt"><span class="tag '+tagClassFor(p.ad)+'">'+escapeHtml(p.ad)+'</span></td>'+
+      '<td>'+fmtKg(stok)+' '+birimEtiketi+'</td>'+
+      '<td>'+(maliyet?fmt(maliyet)+' TL':'—')+'</td>'+
+      '<td><b>'+fmt(deger)+' TL</b></td></tr>';
+  }).join('');
+  return '<table><thead><tr><th>Cins</th><th>Stok</th><th>Ort. Maliyet (TL/'+birimEtiketi+')</th><th>Toplam Değer (TL)</th></tr></thead><tbody>'+
+    satirlar+
+    '</tbody><tfoot><tr><td colspan="3" class="txt" style="text-align:right;"><b>Toplam Değer</b></td><td><b>'+fmt(toplamDeger)+' TL</b></td></tr></tfoot></table>';
+}
 
 function renderGenelFabrikaStok(c){
   c.innerHTML = '<div class="note">Yükleniyor…</div>';
@@ -1702,6 +1725,104 @@ function renderGenelFabrikaStok(c){
         satirDegeri: function(k, key){ return key==='stok' ? fmtKg(k.stok) : (k[key]||''); },
         ozetSatirlari: function(kayitlar){
           return [{etiket:'Toplam Satır', deger:String(kayitlar.length)}];
+        }
+      });
+    });
+  }).catch(function(err){ c.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>'; });
+}
+
+// ============================================================
+// GENEL FABRİKA > STOK MALİYETLERİ — "Stok" sekmesinden AYRI, "Tümü" YOKTUR (her zaman TEK bir
+// birim seçilir), her cins için stok miktarının yanında AĞIRLIKLI ORTALAMA MALİYET (TL/birim) ve
+// TOPLAM DEĞER (TL) de gösterilir. Maliyet zinciri: Hurda (satın alma) → Çapak (hem satın alınan
+// hem hurdadan üretilenin ağırlıklı ortalaması) → Granül (hem satın alınan hem çapaktan üretilenin
+// ağırlıklı ortalaması, üretim payı dahil) → diğer birimlerin ürettiği nihai ürünler (kullandıkları
+// girdinin — hammadde ya da Genel Fabrika Granül'ü — ağırlıklı ortalama maliyetine dayanır).
+// ============================================================
+function renderGenelFabrikaStokMaliyet(c){
+  c.innerHTML = '<div class="note">Yükleniyor…</div>';
+  var buNesil = RENDER_NESLI;
+  fetchHavuzIcinTumVeriler().then(function(hepsi){
+    if(buNesil !== RENDER_NESLI) return;
+    var mc = STATE.merkeziCinsler;
+    var havuzOzet = computeHavuzStokOzeti(hepsi, mc);
+    var digerBirimler = hepsi.filter(function(s){ return s.birim.id !== 'genel-fabrika'; });
+    var granulSonuc = hepsi.find(function(s){ return s.birim.id === 'granul-birimi'; });
+    var capakSonuc = hepsi.find(function(s){ return s.birim.id === 'capak-uretim-birimi'; });
+    var granulVeri = granulSonuc ? granulSonuc.veri : {};
+    var capakVeri = capakSonuc ? capakSonuc.veri : {};
+
+    if(digerBirimler.length===0){
+      c.innerHTML = '<div class="empty"><b>Henüz hiç birim tanımlı değil.</b></div>';
+      return;
+    }
+    if(!digerBirimler.some(function(s){ return s.birim.id === stokMaliyetAltSekme; })){
+      stokMaliyetAltSekme = digerBirimler[0].birim.id; // "Tümü" YOK — her zaman geçerli TEK bir birim seçili olmalı
+    }
+    var secili = digerBirimler.find(function(s){ return s.birim.id === stokMaliyetAltSekme; });
+
+    var altSekmeHtml = '<nav class="tabs" style="margin-bottom:18px;">'+
+      digerBirimler.map(function(s){
+        return '<button class="'+(stokMaliyetAltSekme===s.birim.id?'active':'')+'" data-stokm-alt="'+s.birim.id+'">'+escapeHtml(s.birim.ad)+'</button>';
+      }).join('')+
+    '</nav>';
+
+    var duzKayitlar = []; // PDF için: {cins, stok, maliyet, deger}
+    var icerikHtml = '';
+    var birimEtiketi = 'kg';
+
+    if(secili.birim.id === 'granul-birimi'){
+      icerikHtml = stokMaliyetTablosuHTML(mc.urunler, havuzOzet.granul, function(ad){ return granulCinsiKgMaliyeti(ad, granulVeri, capakVeri); }, 'kg');
+      mc.urunler.forEach(function(p){
+        var stok = havuzOzet.granul[p.ad]||0, maliyet = granulCinsiKgMaliyeti(p.ad, granulVeri, capakVeri);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    } else if(secili.birim.id === 'capak-uretim-birimi'){
+      icerikHtml = stokMaliyetTablosuHTML(mc.capakCinsleri, havuzOzet.capak, function(ad){ return capakCinsiKgMaliyeti(ad, capakVeri); }, 'kg');
+      mc.capakCinsleri.forEach(function(p){
+        var stok = havuzOzet.capak[p.ad]||0, maliyet = capakCinsiKgMaliyeti(p.ad, capakVeri);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    } else {
+      // "Diğer birim" (örn. Şişirme/Enjeksiyon Birimi) — kendi ürettiği nihai ürünlerin stoğu + maliyeti.
+      birimEtiketi = 'adet';
+      var digerOzet = computeStokOzeti(secili.veri, secili.veri, {hurdaGirisleri:[], capakGirisleri:[], granulGirisleri:[]});
+      var digerUrunler = tumUrunlerBirlesik(secili.veri);
+      icerikHtml = stokMaliyetTablosuHTML(digerUrunler, digerOzet.granul, function(ad){ return digerBirimUrunKgMaliyeti(secili.veri, granulVeri, capakVeri, ad); }, 'adet');
+      digerUrunler.forEach(function(p){
+        var stok = digerOzet.granul[p.ad]||0, maliyet = digerBirimUrunKgMaliyeti(secili.veri, granulVeri, capakVeri, p.ad);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    }
+
+    c.innerHTML = altSekmeHtml +
+      '<div class="callout">Maliyetler, "Genel Fabrika"daki (hem satın alınan hem üretilen) ilgili havuzun BUGÜNE KADARKİ ağırlıklı ortalamasına dayanır. Çapak'+"'"+'ın hammaddesi Hurda, Granül'+"'"+'ün hammaddesi Çapak'+"'"+'tır — her kademe bir öncekinin ortalama maliyetini + kendi üretim payını taşır.</div>'+
+      '<div class="section-title" style="margin-top:16px; display:flex; align-items:center; justify-content:space-between;">'+
+        '<span>'+escapeHtml(secili.birim.ad)+' — Stok Maliyetleri</span>'+
+        '<button class="btn ghost small" id="stokm_pdf_btn">PDF Olarak Dışa Aktar</button>'+
+      '</div>'+
+      '<div class="card">'+icerikHtml+'</div>';
+
+    Array.prototype.forEach.call(c.querySelectorAll('[data-stokm-alt]'), function(b){
+      b.addEventListener('click', function(){
+        stokMaliyetAltSekme = b.dataset.stokmAlt;
+        renderGenelFabrikaStokMaliyet(c);
+      });
+    });
+
+    document.getElementById('stokm_pdf_btn').addEventListener('click', function(){
+      pdfDisaAktarPenceresiAc({
+        baslik: secili.birim.ad+' — Stok Maliyetleri',
+        sutunlar: [{key:'cins', label:'Cins'}, {key:'stok', label:'Stok'}, {key:'maliyet', label:'Ort. Maliyet (TL/'+birimEtiketi+')'}, {key:'deger', label:'Toplam Değer (TL)'}],
+        kayitlarGetir: function(){ return duzKayitlar; },
+        satirDegeri: function(k, key){
+          if(key==='stok') return fmtKg(k.stok)+' '+birimEtiketi;
+          if(key==='maliyet'||key==='deger') return fmt(k[key])+' TL';
+          return k[key]||'';
+        },
+        ozetSatirlari: function(kayitlar){
+          var toplamDeger = kayitlar.reduce(function(s,k){ return s+(Number(k.deger)||0); },0);
+          return [{etiket:'Toplam Değer', deger:fmt(toplamDeger)+' TL'}];
         }
       });
     });
@@ -4670,19 +4791,60 @@ function hammaddeOrtalamaFiyat(veri, hammaddeCinsi){
 // girdinin maliyetini hesaplamak için kullanılır. `granulBirimVerisi` = Granül Birimi'nin,
 // `capakBirimVerisi` = Çapak Üretim Birimi'nin KENDİ bd'leri (window.api.getBirimData ile ayrıca
 // çekilmiş olmalı — bu fonksiyon STATE.birimVeri'ye HİÇ bakmaz, tamamen verilen parametrelerle çalışır).
-function granulUretimOrtalamaMaliyeti(granulBirimVerisi, capakBirimVerisi, granulCinsi){
-  var kayitlar = (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi; });
+// Bir granül cinsinin GERÇEK ağırlıklı ortalama maliyeti (TL/kg) — "Genel Fabrika"nın Granül
+// stoğundaki HEM doğrudan satın alınan (Satın Alma > Granül) HEM DE kendi ürettiğimiz (kullanılan
+// çapağın ağırlıklı ortalama maliyeti + üretim/elektrik/işçilik payı) miktarların TAMAMI birlikte
+// sayılır — capakCinsiKgMaliyeti ile birebir aynı mantık, bir kademe yukarıda. Önceden bu
+// fonksiyon (adı granulUretimOrtalamaMaliyeti idi) SADECE kendi ürettiğimizi sayıyordu, doğrudan
+// satın alınan Granül'ü hiç hesaba katmıyordu — bu YANLIŞTI.
+function granulCinsiKgMaliyeti(granulCinsi, granulBirimVerisi, capakBirimVerisi){
   var toplamKg = 0, toplamMaliyet = 0;
-  kayitlar.forEach(function(e){
-    toplamKg += Number(e.kg)||0;
+
+  // 1) Doğrudan satın alınan Granül (Satın Alma > Granül sekmesi, fireDestekli değil).
+  (STATE.merkeziSatinAlmalar.granulGirisleri||[]).filter(function(g){ return g.urun === granulCinsi; }).forEach(function(g){
+    var kg = Number(g.kg)||0;
+    if(!kg) return;
+    toplamKg += kg;
+    toplamMaliyet += girisNakliyeliToplamMaliyet(g);
+  });
+
+  // 2) Kendi ürettiğimiz Granül (Granül Birimi'nin entries'i).
+  (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi; }).forEach(function(e){
+    var kg = Number(e.kg)||0;
+    if(!kg) return;
+    toplamKg += kg;
     var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
-    if(cst.maliyetGirildi) toplamMaliyet += cst.toplamMaliyet;
-    // Bu granül üretiminde kullanılan çapağın maliyeti de dahil edilir (İşçilik kaynaklıysa 0 — bedelsiz).
+    var maliyet = cst.maliyetGirildi ? cst.toplamMaliyet : 0;
+    // Bu granül üretiminde kullanılan çapağın (Genel Fabrika'daki hem satın alınan hem üretilen
+    // çapak havuzundan gelen) ağırlıklı ortalama maliyeti de dahil edilir (İşçilik kaynaklıysa 0 — bedelsiz).
     if(e.capakCinsi && Number(e.kullanilanCapak) && e.capakKaynagi !== 'iscilik'){
-      toplamMaliyet += Number(e.kullanilanCapak) * capakCinsiKgMaliyeti(e.capakCinsi, capakBirimVerisi);
+      maliyet += Number(e.kullanilanCapak) * capakCinsiKgMaliyeti(e.capakCinsi, capakBirimVerisi);
+    }
+    toplamMaliyet += maliyet;
+  });
+
+  return toplamKg ? toplamMaliyet/toplamKg : 0;
+}
+
+// "Diğer birim"lerin (örn. Şişirme/Enjeksiyon Birimi) ürettiği bir ürünün ağırlıklı ortalama
+// maliyeti (TL/adet ya da TL/kg — birime göre) — o ürünü üretmek için tüketilen girdinin
+// (kendi hammaddesi VEYA Genel Fabrika'nın paylaşımlı Granül stoğu) ağırlıklı ortalama maliyetine
+// dayanır. granulBirimVerisi/capakBirimVerisi sadece girdiTuru==='granul' olan kayıtlar varsa gerekir.
+function digerBirimUrunKgMaliyeti(veri, granulBirimVerisi, capakBirimVerisi, urunAdi){
+  var toplamMiktar = 0, toplamMaliyet = 0;
+  (veri.entries||[]).filter(function(e){ return e.urun === urunAdi; }).forEach(function(e){
+    var miktar = Number(e.kg)||0;
+    if(!miktar) return;
+    toplamMiktar += miktar;
+    if(e.hammaddeCinsi && Number(e.kullanilanCapak)){
+      if(e.girdiTuru === 'granul' && granulBirimVerisi){
+        toplamMaliyet += Number(e.kullanilanCapak) * granulCinsiKgMaliyeti(e.hammaddeCinsi, granulBirimVerisi, capakBirimVerisi||{});
+      } else if(e.girdiTuru !== 'granul'){
+        toplamMaliyet += Number(e.kullanilanCapak) * hammaddeOrtalamaFiyat(veri, e.hammaddeCinsi);
+      }
     }
   });
-  return toplamKg ? toplamMaliyet/toplamKg : 0;
+  return toplamMiktar ? toplamMaliyet/toplamMiktar : 0;
 }
 
 // İşçilik Çapak stoğu: müşterinin bedelsiz getirdiği çapak — satın alınan (+) eksi Granül
@@ -5872,7 +6034,7 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
       // çapak maliyeti dahil) ağırlıklı ortalama ÜRETİM maliyeti. Girdi seçilmemiş kayıtlarda (opsiyonel) 0 kalır.
       if(e.hammaddeCinsi && Number(e.kullanilanCapak)){
         if(e.girdiTuru === 'granul' && granulBirimVerisiCapraz){
-          perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * granulUretimOrtalamaMaliyeti(granulBirimVerisiCapraz, capakBirimVerisiCapraz||{}, e.hammaddeCinsi);
+          perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * granulCinsiKgMaliyeti(e.hammaddeCinsi, granulBirimVerisiCapraz, capakBirimVerisiCapraz||{});
         } else if(e.girdiTuru !== 'granul'){
           perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * hammaddeOrtalamaFiyat(STATE.birimVeri, e.hammaddeCinsi);
         }
