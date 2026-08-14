@@ -4887,16 +4887,37 @@ function capakUretimBirimiHurdaOrtalamaFiyat(hurdaCinsi){
 // Bir çapak cinsinin, o cinsi üretmek için BUGÜNE KADAR kullanılan hurdaların ağırlıklı ortalama
 // alım fiyatına dayanan TL/kg maliyeti. Satış kaydı oluşturulduğu anda hesaplanıp kalıcı olarak
 // saklanır (ileride hurda fiyatları değişse bile geçmiş satışın maliyeti değişmez).
-function capakCinsiKgMaliyeti(capakCinsi, veriOverride){
-  var veri = veriOverride || STATE.birimVeri;
-  var uretimler = (veri.capakUretimleri||[]).filter(function(cu){ return (cu.capakCinsi||cu.urun) === capakCinsi; });
-  var toplamUretilen = uretimler.reduce(function(s,cu){ return s + (Number(cu.uretilenCapak)||0); }, 0);
-  if(!toplamUretilen) return 0;
-  var toplamHurdaMaliyeti = uretimler.reduce(function(s,cu){
+// Bir çapak cinsinin GERÇEK ağırlıklı ortalama maliyeti (TL/kg) — BİRİKMİŞ TÜM stok kaynaklarını
+// (hem kendi ürettiğimiz hem doğrudan satın aldığımız) birlikte sayar. Önceden bu fonksiyon
+// SADECE kendi ürettiğimiz (hurdadan dönüştürdüğümüz) çapağı sayıyordu — dışarıdan doğrudan satın
+// alınan çapak (Satın Alma > Çapak sekmesi) hiç dahil edilmiyordu, bu da elde 1000 kg kendi
+// üretimimiz (örn. 15 TL/kg) + 2000 kg doğrudan alım (örn. 20 TL/kg) varken maliyeti YANLIŞ
+// şekilde sadece 15 TL/kg gösteriyordu; doğrusu ağırlıklı ortalama olan 18,33 TL/kg'dır.
+function capakCinsiKgMaliyeti(capakCinsi, capakBirimVeriOverride){
+  var veri = capakBirimVeriOverride || STATE.birimVeri;
+  var toplamKg = 0, toplamMaliyet = 0;
+
+  // 1) Kendi ürettiğimiz (hurdadan dönüştürdüğümüz) çapak — hurda maliyeti + üretim (elektrik/su/işçilik) payı.
+  (veri.capakUretimleri||[]).filter(function(cu){ return (cu.capakCinsi||cu.urun) === capakCinsi; }).forEach(function(cu){
+    var kg = Number(cu.uretilenCapak)||0;
+    if(!kg) return;
+    toplamKg += kg;
     var hc = cu.hurdaCinsi || cu.urun;
-    return s + (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(hc);
-  }, 0);
-  return toplamHurdaMaliyeti / toplamUretilen;
+    var hurdaMaliyeti = (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(hc);
+    var uretimCst = computeCapakMaliyet(cu, veri, vardiyaGrupToplamKg(cu, veri, 'capakUretimleri', 'uretilenCapak'));
+    toplamMaliyet += hurdaMaliyeti + (uretimCst.maliyetGirildi ? uretimCst.toplamMaliyet : 0);
+  });
+
+  // 2) Doğrudan dışarıdan satın alınan çapak (Satın Alma > Çapak sekmesi) — merkezi/paylaşımlı
+  // veri olduğu için hangi birim bağlamından çağrılırsa çağrılsın AYNI STATE.merkeziSatinAlmalar'dan gelir.
+  (STATE.merkeziSatinAlmalar.capakGirisleri||[]).filter(function(g){ return g.urun === capakCinsi; }).forEach(function(g){
+    var kg = fireliKg(g);
+    if(!kg) return;
+    toplamKg += kg;
+    toplamMaliyet += girisNakliyeliToplamMaliyet(g);
+  });
+
+  return toplamKg ? toplamMaliyet/toplamKg : 0;
 }
 
 // ============================================================
