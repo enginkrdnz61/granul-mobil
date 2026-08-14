@@ -1756,14 +1756,21 @@ function renderGenelFabrikaStokMaliyet(c){
       c.innerHTML = '<div class="empty"><b>Henüz hiç birim tanımlı değil.</b></div>';
       return;
     }
-    if(!digerBirimler.some(function(s){ return s.birim.id === stokMaliyetAltSekme; })){
-      stokMaliyetAltSekme = digerBirimler[0].birim.id; // "Tümü" YOK — her zaman geçerli TEK bir birim seçili olmalı
+    // Sekme listesi: "Hurda Cinsleri" (herhangi bir birime bağlı olmayan, zincirin başlangıç
+    // noktası — sadece satın alınır, üretilmez) + her birim (Granül/Çapak Üretim/diğer birimler).
+    var hurdaSekmesiVarMi = mc.hurdaCinsleri.length > 0;
+    var sekmeler = (hurdaSekmesiVarMi ? [{id:'hurda-cinsleri', ad:'Hurda Cinsleri'}] : [])
+      .concat(digerBirimler.map(function(s){ return {id:s.birim.id, ad:s.birim.ad}; }));
+
+    if(!sekmeler.some(function(s){ return s.id === stokMaliyetAltSekme; })){
+      stokMaliyetAltSekme = sekmeler[0].id; // "Tümü" YOK — her zaman geçerli TEK bir sekme seçili olmalı
     }
-    var secili = digerBirimler.find(function(s){ return s.birim.id === stokMaliyetAltSekme; });
+    var seciliSekme = sekmeler.find(function(s){ return s.id === stokMaliyetAltSekme; });
+    var secili = digerBirimler.find(function(s){ return s.birim.id === stokMaliyetAltSekme; }); // hurda-cinsleri için undefined kalır, aşağıda ayrıca ele alınır
 
     var altSekmeHtml = '<nav class="tabs" style="margin-bottom:18px;">'+
-      digerBirimler.map(function(s){
-        return '<button class="'+(stokMaliyetAltSekme===s.birim.id?'active':'')+'" data-stokm-alt="'+s.birim.id+'">'+escapeHtml(s.birim.ad)+'</button>';
+      sekmeler.map(function(s){
+        return '<button class="'+(stokMaliyetAltSekme===s.id?'active':'')+'" data-stokm-alt="'+s.id+'">'+escapeHtml(s.ad)+'</button>';
       }).join('')+
     '</nav>';
 
@@ -1771,7 +1778,13 @@ function renderGenelFabrikaStokMaliyet(c){
     var icerikHtml = '';
     var birimEtiketi = 'kg';
 
-    if(secili.birim.id === 'granul-birimi'){
+    if(stokMaliyetAltSekme === 'hurda-cinsleri'){
+      icerikHtml = stokMaliyetTablosuHTML(mc.hurdaCinsleri, havuzOzet.hurda, function(ad){ return capakUretimBirimiHurdaOrtalamaFiyat(ad); }, 'kg');
+      mc.hurdaCinsleri.forEach(function(p){
+        var stok = havuzOzet.hurda[p.ad]||0, maliyet = capakUretimBirimiHurdaOrtalamaFiyat(p.ad);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    } else if(secili.birim.id === 'granul-birimi'){
       icerikHtml = stokMaliyetTablosuHTML(mc.urunler, havuzOzet.granul, function(ad){ return granulCinsiKgMaliyeti(ad, granulVeri, capakVeri); }, 'kg');
       mc.urunler.forEach(function(p){
         var stok = havuzOzet.granul[p.ad]||0, maliyet = granulCinsiKgMaliyeti(p.ad, granulVeri, capakVeri);
@@ -1798,7 +1811,7 @@ function renderGenelFabrikaStokMaliyet(c){
     c.innerHTML = altSekmeHtml +
       '<div class="callout">Maliyetler, "Genel Fabrika"daki (hem satın alınan hem üretilen) ilgili havuzun BUGÜNE KADARKİ ağırlıklı ortalamasına dayanır. Çapak'+"'"+'ın hammaddesi Hurda, Granül'+"'"+'ün hammaddesi Çapak'+"'"+'tır — her kademe bir öncekinin ortalama maliyetini + kendi üretim payını taşır.</div>'+
       '<div class="section-title" style="margin-top:16px; display:flex; align-items:center; justify-content:space-between;">'+
-        '<span>'+escapeHtml(secili.birim.ad)+' — Stok Maliyetleri</span>'+
+        '<span>'+escapeHtml(seciliSekme.ad)+' — Stok Maliyetleri</span>'+
         '<button class="btn ghost small" id="stokm_pdf_btn">PDF Olarak Dışa Aktar</button>'+
       '</div>'+
       '<div class="card">'+icerikHtml+'</div>';
@@ -1812,7 +1825,7 @@ function renderGenelFabrikaStokMaliyet(c){
 
     document.getElementById('stokm_pdf_btn').addEventListener('click', function(){
       pdfDisaAktarPenceresiAc({
-        baslik: secili.birim.ad+' — Stok Maliyetleri',
+        baslik: seciliSekme.ad+' — Stok Maliyetleri',
         sutunlar: [{key:'cins', label:'Cins'}, {key:'stok', label:'Stok'}, {key:'maliyet', label:'Ort. Maliyet (TL/'+birimEtiketi+')'}, {key:'deger', label:'Toplam Değer (TL)'}],
         kayitlarGetir: function(){ return duzKayitlar; },
         satirDegeri: function(k, key){
