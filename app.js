@@ -2520,10 +2520,6 @@ function renderPanel(c){
   var todaySure = todayCosts.reduce(function(s,c){ return s+c.sure; },0);
   var todayVerim = todaySure ? todayKg/todaySure : 0;
   var monthKg = monthly.reduce(function(s,e){ return s+Number(e.kg); },0);
-  var monthCosts = monthly.map(computeCosts);
-  var monthMaliyetVar = bulAylikKapanis(monthKey) !== null;
-  var monthCost = monthCosts.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
-  var monthUnit = monthKg ? monthCost/monthKg : 0;
 
   c.innerHTML =
     '<div class="grid grid-3">'+
@@ -2532,23 +2528,46 @@ function renderPanel(c){
       '<div class="card"><h3>Bugün Ort. Saatlik Verim</h3><div class="stat" style="color:var(--amber);">'+fmt(todayVerim)+'<small>kg/saat</small></div></div>'+
     '</div>'+
     '<div class="section-title">Bu Ayki Durum ('+monthKey+')</div>'+
-    (monthMaliyetVar ? '' : '<div class="callout">Bu ayın maliyet parametreleri henüz girilmedi. Üretim miktarlarını görebilirsiniz; maliyeti görmek için ay sonunda <b>Aylık Rapor</b> sekmesinden girin.</div>')+
-    '<div class="grid grid-2">'+
-      '<div class="card"><h3>Toplam Üretim / Maliyet</h3>'+
-        '<div class="stat" style="margin-bottom:10px;">'+fmtKg(monthKg)+'<small>kg</small></div>'+
-        '<div class="stat" style="font-size:18px; color:var(--muted); margin-bottom:6px;">'+(monthMaliyetVar?fmt(monthCost)+' <small>TL toplam maliyet</small>':'<small>Maliyet henüz girilmedi</small>')+'</div>'+
-        (monthMaliyetVar ? '<div class="note">Ort. birim maliyet: <b class="mono" style="color:var(--text);">'+fmt(monthUnit)+' TL/kg</b></div>' : '')+
-      '</div>'+
-      '<div class="card"><h3>Ürün Dağılımı (kg)</h3><div class="chart-wrap" style="height:180px;"><canvas id="panelDonut"></canvas></div></div>'+
-    '</div>'+
+    '<div id="panel_ay_durum"><div class="note">Yükleniyor…</div></div>'+
     '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
       '<span>Bugünün Kayıtları</span><button class="btn ghost small" id="panel_pdf_btn">PDF Olarak Dışa Aktar</button>'+
     '</div>'+
     '<div class="card">'+(todays.length===0 ? '<div class="empty"><b>Bugün henüz üretim kaydı yok</b>Yeni Kayıt sekmesinden ekleyebilirsiniz.</div>' : renderEntryTable(todays,false,false))+'</div>'+
     '<div class="section-title">Üretim Grafiği</div>'+
     '<div class="card" id="panel_grafik"></div>';
-  drawDonut('panelDonut', monthly);
   renderBirimUretimGrafigi('panel_grafik', STATE.birimVeri, STATE.aktifBirimId, 'kg');
+
+  // "Bu Ayki Durum" kartı ASENKRON dolduruluyor çünkü Ortak İşçilik Payı'nı (Çapak Üretim
+  // Birimi ile PAYLAŞILAN personelin kg oranına göre bölüşümü) hesaplayabilmek için Çapak Üretim
+  // Birimi'nin o ayki verisine (kg üretimi) ihtiyaç var — Bilanço'dakiyle BİREBİR AYNI mantık,
+  // artık Panel'de de tutarlı şekilde gösteriliyor.
+  var buNesil = RENDER_NESLI;
+  window.api.getBirimData('capak-uretim-birimi').then(function(capakVeri){
+    if(buNesil !== RENDER_NESLI) return;
+    var monthCosts = monthly.map(computeCosts);
+    var monthMaliyetVar = bulAylikKapanis(monthKey) !== null && bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
+    var monthCostTemel = monthCosts.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
+    var ortakPay = 0;
+    if(monthMaliyetVar){
+      ortakPay = ortakIscilikPayiHesapla(monthKey, STATE.birimVeri, capakVeri).granulPay;
+    }
+    var monthCost = monthCostTemel + ortakPay;
+    var monthUnit = monthKg ? monthCost/monthKg : 0;
+    var box = document.getElementById('panel_ay_durum'); if(!box) return;
+    box.innerHTML =
+      (monthMaliyetVar ? '' : '<div class="callout">Bu ayın maliyet parametreleri henüz girilmedi. Üretim miktarlarını görebilirsiniz; maliyeti görmek için ay sonunda <b>Aylık Rapor</b> sekmesinden girin.</div>')+
+      '<div class="grid grid-2">'+
+        '<div class="card"><h3>Toplam Üretim / Maliyet</h3>'+
+          '<div class="stat" style="margin-bottom:10px;">'+fmtKg(monthKg)+'<small>kg</small></div>'+
+          '<div class="stat" style="font-size:18px; color:var(--muted); margin-bottom:6px;">'+(monthMaliyetVar?fmt(monthCost)+' <small>TL toplam maliyet'+(ortakPay>0?' — Ortak İşçilik Payı dahil':'')+'</small>':'<small>Maliyet henüz girilmedi</small>')+'</div>'+
+          (monthMaliyetVar ? '<div class="note">Ort. birim maliyet: <b class="mono" style="color:var(--text);">'+fmt(monthUnit)+' TL/kg</b></div>' : '')+
+        '</div>'+
+        '<div class="card"><h3>Ürün Dağılımı (kg)</h3><div class="chart-wrap" style="height:180px;"><canvas id="panelDonut"></canvas></div></div>'+
+      '</div>';
+    drawDonut('panelDonut', monthly);
+  }).catch(function(err){
+    var box = document.getElementById('panel_ay_durum'); if(box) box.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
+  });
 
   (document.getElementById('panel_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
     pdfDisaAktarPenceresiAc({
@@ -2597,10 +2616,6 @@ function renderCapakUretimPanel(c){
   var todayCost = todayCosts.reduce(function(s,cs){ return s+cs.toplamMaliyet; },0);
 
   var monthKg = monthly.reduce(function(s,cu){ return s+Number(cu.uretilenCapak); },0);
-  var monthCosts = monthly.map(function(cu){ return computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak')); });
-  var monthMaliyetVar = bulAylikKapanis(monthKey) !== null;
-  var monthCost = monthCosts.reduce(function(s,cs){ return s+cs.toplamMaliyet; },0);
-  var monthUnit = monthKg ? monthCost/monthKg : 0;
 
   c.innerHTML =
     '<div class="grid grid-3">'+
@@ -2609,15 +2624,7 @@ function renderCapakUretimPanel(c){
       '<div class="card"><h3>Bu Ay Üretim</h3><div class="stat">'+fmtKg(monthKg)+'<small>kg</small></div></div>'+
     '</div>'+
     '<div class="section-title">Bu Ayki Durum ('+monthKey+')</div>'+
-    (monthMaliyetVar ? '' : '<div class="callout">Bu ayın maliyet parametreleri henüz girilmedi. Üretim miktarlarını görebilirsiniz; maliyeti görmek için ay sonunda <b>Aylık Rapor</b> sekmesinden girin.</div>')+
-    '<div class="grid grid-2">'+
-      '<div class="card"><h3>Toplam Üretim / Maliyet</h3>'+
-        '<div class="stat" style="margin-bottom:10px;">'+fmtKg(monthKg)+'<small>kg</small></div>'+
-        '<div class="stat" style="font-size:18px; color:var(--muted); margin-bottom:6px;">'+(monthMaliyetVar?fmt(monthCost)+' <small>TL toplam maliyet</small>':'<small>Maliyet henüz girilmedi</small>')+'</div>'+
-        (monthMaliyetVar ? '<div class="note">Ort. birim maliyet: <b class="mono" style="color:var(--text);">'+fmt(monthUnit)+' TL/kg</b></div>' : '')+
-      '</div>'+
-      '<div class="card"><h3>Ürün Dağılımı (kg)</h3><div class="chart-wrap" style="height:180px;"><canvas id="ckPanelDonut"></canvas></div></div>'+
-    '</div>'+
+    '<div id="ck_panel_ay_durum"><div class="note">Yükleniyor…</div></div>'+
     '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
       '<span>Bugünün Kayıtları</span><button class="btn ghost small" id="ck_panel_pdf_btn">PDF Olarak Dışa Aktar</button>'+
     '</div>'+
@@ -2635,20 +2642,48 @@ function renderCapakUretimPanel(c){
     '</div>'+
     '<div class="section-title">Üretim Grafiği</div>'+
     '<div class="card" id="ck_panel_grafik"></div>';
-
-  var perCins = {};
-  monthly.forEach(function(cu){ var cc = cu.capakCinsi||cu.urun; perCins[cc] = (perCins[cc]||0) + Number(cu.uretilenCapak); });
-  var labels = Object.keys(perCins);
-  if(donutChartRef) donutChartRef.destroy();
-  if(labels.length>0){
-    donutChartRef = new Chart(document.getElementById('ckPanelDonut'), {
-      type:'doughnut', data:{labels:labels, datasets:[{data:labels.map(function(l){return perCins[l];}), backgroundColor:labels.map(function(l,i){ return GRAFIK_RENKLER[i%GRAFIK_RENKLER.length]; })}]},
-      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom', labels:{color:'#EDEFF1', boxWidth:12, font:{size:11}}}}}
-    });
-  } else {
-    document.getElementById('ckPanelDonut').parentElement.innerHTML = '<div class="empty">Bu ay için henüz veri yok</div>';
-  }
   renderBirimUretimGrafigi('ck_panel_grafik', STATE.birimVeri, STATE.aktifBirimId, 'kg');
+
+  // "Bu Ayki Durum" kartı ASENKRON dolduruluyor — Ortak İşçilik Payı için Granül Birimi'nin o
+  // ayki verisine (kg üretimi + ortakIscilikAylikMaas) ihtiyaç var (Bilanço'dakiyle aynı mantık).
+  var buNesil = RENDER_NESLI;
+  window.api.getBirimData('granul-birimi').then(function(granulVeri){
+    if(buNesil !== RENDER_NESLI) return;
+    var monthCosts = monthly.map(function(cu){ return computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak')); });
+    var monthMaliyetVar = bulAylikKapanis(monthKey) !== null && bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
+    var monthCostTemel = monthCosts.reduce(function(s,cs){ return s+cs.toplamMaliyet; },0);
+    var ortakPay = 0;
+    if(monthMaliyetVar){
+      ortakPay = ortakIscilikPayiHesapla(monthKey, granulVeri, STATE.birimVeri).capakPay;
+    }
+    var monthCost = monthCostTemel + ortakPay;
+    var monthUnit = monthKg ? monthCost/monthKg : 0;
+    var box = document.getElementById('ck_panel_ay_durum'); if(!box) return;
+    box.innerHTML =
+      (monthMaliyetVar ? '' : '<div class="callout">Bu ayın maliyet parametreleri henüz girilmedi. Üretim miktarlarını görebilirsiniz; maliyeti görmek için ay sonunda <b>Aylık Rapor</b> sekmesinden girin.</div>')+
+      '<div class="grid grid-2">'+
+        '<div class="card"><h3>Toplam Üretim / Maliyet</h3>'+
+          '<div class="stat" style="margin-bottom:10px;">'+fmtKg(monthKg)+'<small>kg</small></div>'+
+          '<div class="stat" style="font-size:18px; color:var(--muted); margin-bottom:6px;">'+(monthMaliyetVar?fmt(monthCost)+' <small>TL toplam maliyet'+(ortakPay>0?' — Ortak İşçilik Payı dahil':'')+'</small>':'<small>Maliyet henüz girilmedi</small>')+'</div>'+
+          (monthMaliyetVar ? '<div class="note">Ort. birim maliyet: <b class="mono" style="color:var(--text);">'+fmt(monthUnit)+' TL/kg</b></div>' : '')+
+        '</div>'+
+        '<div class="card"><h3>Ürün Dağılımı (kg)</h3><div class="chart-wrap" style="height:180px;"><canvas id="ckPanelDonut"></canvas></div></div>'+
+      '</div>';
+    var perCins = {};
+    monthly.forEach(function(cu){ var cc = cu.capakCinsi||cu.urun; perCins[cc] = (perCins[cc]||0) + Number(cu.uretilenCapak); });
+    var labels = Object.keys(perCins);
+    if(donutChartRef) donutChartRef.destroy();
+    if(labels.length>0){
+      donutChartRef = new Chart(document.getElementById('ckPanelDonut'), {
+        type:'doughnut', data:{labels:labels, datasets:[{data:labels.map(function(l){return perCins[l];}), backgroundColor:labels.map(function(l,i){ return GRAFIK_RENKLER[i%GRAFIK_RENKLER.length]; })}]},
+        options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom', labels:{color:'#EDEFF1', boxWidth:12, font:{size:11}}}}}
+      });
+    } else {
+      document.getElementById('ckPanelDonut').parentElement.innerHTML = '<div class="empty">Bu ay için henüz veri yok</div>';
+    }
+  }).catch(function(err){
+    var box = document.getElementById('ck_panel_ay_durum'); if(box) box.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
+  });
 
   (document.getElementById('ck_panel_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
     pdfDisaAktarPenceresiAc({
