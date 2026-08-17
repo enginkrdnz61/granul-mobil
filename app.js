@@ -385,7 +385,7 @@ function buildPrintReportHTML(list, baslikAraligi){
   var herhangiMaliyetVar = costs.some(function(c){ return c.maliyetGirildi; });
   var totalCost = costs.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
   var unit = totalKg ? totalCost/totalKg : 0;
-  var toplamSure = costs.reduce(function(s,c){ return s+c.sure; },0);
+  var toplamSure = costs.reduce(function(s,c){ return s+c.gosterilenSure; },0);
   var avgVerim = toplamSure ? totalKg/toplamSure : 0;
 
   var perProduct = {};
@@ -2620,10 +2620,10 @@ function renderPanel(c){
   var monthly = STATE.birimVeri.entries.filter(function(e){ return e.tarih.slice(0,7)===monthKey; });
 
   var todayKg = todays.reduce(function(s,e){ return s+Number(e.kg); },0);
-  var todayCosts = todays.map(computeCosts);
+  var todayCosts = todays.map(function(e){ return computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
   var todayMaliyetVar = todayCosts.some(function(c){ return c.maliyetGirildi; });
   var todayCost = todayCosts.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
-  var todaySure = todayCosts.reduce(function(s,c){ return s+c.sure; },0);
+  var todaySure = todayCosts.reduce(function(s,c){ return s+c.gosterilenSure; },0);
   var todayVerim = todaySure ? todayKg/todaySure : 0;
   var monthKg = monthly.reduce(function(s,e){ return s+Number(e.kg); },0);
 
@@ -2651,7 +2651,7 @@ function renderPanel(c){
   Promise.all([window.api.getBirimData('capak-uretim-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
     if(buNesil !== RENDER_NESLI) return;
     var capakVeri = sonuc[0], personelListesi = sonuc[1];
-    var monthCosts = monthly.map(computeCosts);
+    var monthCosts = monthly.map(function(e){ return computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
     var monthMaliyetVar = bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
     var monthCostTemel = monthCosts.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
     var ortakPay = 0;
@@ -4802,7 +4802,7 @@ function renderAylikContent(month){
   var totalCostTemel = costs.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
   var totalElek = costs.reduce(function(s,c){ return s+c.toplamElektrik; },0);
   var totalIsc = costs.reduce(function(s,c){ return s+c.toplamIscilik; },0);
-  var totalSure = costs.reduce(function(s,c){ return s+c.sure; },0);
+  var totalSure = costs.reduce(function(s,c){ return s+c.gosterilenSure; },0);
   var avgVerim = totalSure ? totalKg/totalSure : 0;
   var daysWithProd = new Set(list.map(function(e){ return e.tarih; })).size;
 
@@ -5032,11 +5032,11 @@ function renderAylikContent(month){
   var gunduzSums = {}, geceSums = {}; // gün -> {kg, sure}
   list.forEach(function(e){
     var d = Number(e.tarih.slice(8,10));
-    var cst = computeCosts(e);
+    var cst = computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
     var bucket = e.vardiya === 'gece' ? geceSums : gunduzSums;
     if(!bucket[d]) bucket[d] = {kg:0, sure:0};
     bucket[d].kg += Number(e.kg);
-    bucket[d].sure += cst.sure;
+    bucket[d].sure += cst.gosterilenSure;
   });
   for(var d=1; d<=daysInMonth; d++){
     if(gunduzSums[d] && gunduzSums[d].sure) gunduzVerim[d-1] = gunduzSums[d].kg / gunduzSums[d].sure;
