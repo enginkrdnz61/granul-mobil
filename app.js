@@ -321,17 +321,22 @@ function computeCosts(entry, birimVeriOverride, vardiyaGrupToplamKgOverride){
   } else {
     var ay = (entry.tarih||'').slice(0,7);
     var aylikFiyat = bulAylikFiyat(ay, kaynak);
-    var kapanis = bulAylikKapanis(ay, kaynak);
-    if(!aylikFiyat || !kapanis){
+    // SADECE elektrik fiyatı (merkezi Aylık Fiyat) zorunludur — o olmadan hiçbir maliyet
+    // hesaplanamaz. Bu birimin KENDİ maaş kaydı (Aylık Kapanış) o ay için HİÇ girilmemiş olsa
+    // bile (örn. tüm personel "Ortak" kategorisindeyse, kendi maaş alanlarına hiç gerek kalmaz),
+    // maaş kısmı güvenle 0 kabul edilir — elektrik maliyeti (ve varsa Ortak İşçilik Payı, ayrıca
+    // eklenir) yine de doğru hesaplanabilsin diye.
+    if(!aylikFiyat){
       return {sure:sure, gosterilenSure:gosterilenSure, saatlikVerim:saatlikVerim, agromelYapildi:agromelYapildi, maliyetGirildi:false,
         agromelElektrik:0, granulElektrik:0, iscilikAgromel:0, iscilikGranul:0,
         toplamElektrik:0, toplamIscilik:0, toplamMaliyet:0, birimMaliyet:0};
     }
+    var kapanis = bulAylikKapanis(ay, kaynak) || {};
     params = {
       elektrikFiyati: aylikFiyat.elektrikFiyati, aylikCalismaSuresi: aylikFiyat.aylikCalismaSuresi,
       agromelKapasite: kaynak.settings.agromelKapasite, granulKapasite: kaynak.settings.granulKapasite,
-      agromelGunduzMaas: kapanis.agromelGunduzMaas, agromelGeceMaas: kapanis.agromelGeceMaas,
-      granulGunduzMaas: kapanis.granulGunduzMaas, granulGeceMaas: kapanis.granulGeceMaas
+      agromelGunduzMaas: Number(kapanis.agromelGunduzMaas)||0, agromelGeceMaas: Number(kapanis.agromelGeceMaas)||0,
+      granulGunduzMaas: Number(kapanis.granulGunduzMaas)||0, granulGeceMaas: Number(kapanis.granulGeceMaas)||0
     };
   }
 
@@ -339,8 +344,8 @@ function computeCosts(entry, birimVeriOverride, vardiyaGrupToplamKgOverride){
   var granulElektrik = sure * params.elektrikFiyati * params.granulKapasite;
   var agromelMaas = entry.vardiya === 'gece' ? params.agromelGeceMaas : params.agromelGunduzMaas;
   var granulMaas = entry.vardiya === 'gece' ? params.granulGeceMaas : params.granulGunduzMaas;
-  var iscilikAgromel = agromelYapildi ? (agromelMaas / params.aylikCalismaSuresi) * sure : 0;
-  var iscilikGranul = (granulMaas / params.aylikCalismaSuresi) * sure;
+  var iscilikAgromel = (agromelYapildi && params.aylikCalismaSuresi) ? (agromelMaas / params.aylikCalismaSuresi) * sure : 0;
+  var iscilikGranul = params.aylikCalismaSuresi ? (granulMaas / params.aylikCalismaSuresi) * sure : 0;
   var toplamElektrikVardiya = agromelElektrik + granulElektrik; // TÜM vardiyanın elektrik gideri
   var toplamIscilikVardiya = iscilikAgromel + iscilikGranul; // TÜM vardiyanın işçilik gideri
   var toplamMaliyetVardiya = toplamElektrikVardiya + toplamIscilikVardiya; // TÜM vardiyanın gideri — tek bir ürünün kg'sinden bağımsız
@@ -2014,7 +2019,7 @@ function renderGenelFabrikaParametreler(c){
       '<button class="btn" id="gfp_fiyat_kaydet">Bu Ayı Kaydet</button>'+
     '</div>'+
     '<div class="section-title">Tüketim Parametreleri (Makine Kapasiteleri)</div>'+
-    '<div class="callout">Bu değerler yapısaldır (aylık değişmez, nadiren güncellenir) — hangi makinenin ne kadar elektrik/su tükettiğini belirtir. Her biri otomatik olarak ilgili birimi (Granül ya da Çapak Üretim) etkiler.</div>'+
+    '<div class="callout">Bu değerler yapısaldır (aylık değişmez, nadiren güncellenir) — hangi makinenin ne kadar elektrik/su tükettiğini belirtir. Her biri otomatik olarak ilgili birimi etkiler. Yeni bir birim eklediğinizde, o birim de otomatik olarak bu listeye eklenir.</div>'+
     '<div class="card" style="max-width:640px;" id="gfp_tuketim_kart"><div class="note">Yükleniyor…</div></div>'+
     '<div id="gf_diger_birimler_cins"><div class="note">Yükleniyor…</div></div>'+
     '<div class="section-title">Birimlerin Kendi Parametreleri</div>'+
@@ -2067,7 +2072,7 @@ function renderGenelFabrikaParametreler(c){
     var capakBirimSonuc = sonuclar.find(function(s){ return s.birim.id === 'capak-uretim-birimi'; });
     var digerBirimler = sonuclar.filter(function(s){ return digerBirimMi(s.birim.id); });
 
-    // ---- Tüketim Parametreleri formu (Granül + Çapak Üretim'in settings'ini günceller) ----
+    // ---- Tüketim Parametreleri formu (Granül + Çapak Üretim + HER "diğer birim"in settings'ini günceller) ----
     var tuketimKart = document.getElementById('gfp_tuketim_kart');
     if(tuketimKart){
       var gSt = granulBirimSonuc ? granulBirimSonuc.veri.settings : {};
@@ -2081,6 +2086,16 @@ function renderGenelFabrikaParametreler(c){
           '<div class="field"><label>Sulu Kırma Hattı Elektrik Tüketimi (KWH) — Çapak Üretim Birimi</label><input type="number" step="0.1" id="gfp_suluelek" value="'+(cSt.suluKirmaElektrik||0)+'"></div>'+
           '<div class="field"><label>Sulu Kırma Hattı Su Tüketimi (m³/h) — Çapak Üretim Birimi</label><input type="number" step="0.1" id="gfp_sulusu" value="'+(cSt.suluKirmaSu||0)+'"></div>'+
         '</div>'+
+        (digerBirimler.length>0 ?
+          '<div class="note" style="margin:12px 0 8px; padding-top:12px; border-top:1px solid var(--line);">Diğer Birimler</div>'+
+          digerBirimler.map(function(s){
+            var dSt = s.veri.settings;
+            return '<div class="row">'+
+              '<div class="field"><label>Elektrik Tüketimi (KWH) — '+escapeHtml(s.birim.ad)+'</label><input type="number" step="0.1" class="gfp_diger_elek" data-birim="'+s.birim.id+'" value="'+(dSt.elektrikTuketimi||0)+'"></div>'+
+              '<div class="field"><label>Su Tüketimi (m³/h) — '+escapeHtml(s.birim.ad)+'</label><input type="number" step="0.1" class="gfp_diger_su" data-birim="'+s.birim.id+'" value="'+(dSt.suTuketimi||0)+'"></div>'+
+            '</div>';
+          }).join('')
+          : '')+
         '<button class="btn" id="gfp_tuketim_kaydet">Kaydet</button>';
 
       document.getElementById('gfp_tuketim_kaydet').addEventListener('click', function(){
@@ -2099,6 +2114,14 @@ function renderGenelFabrikaParametreler(c){
             suluKirmaSu: Number(document.getElementById('gfp_sulusu').value)||0
           }));
         }
+        digerBirimler.forEach(function(s){
+          var elekInput = document.querySelector('.gfp_diger_elek[data-birim="'+s.birim.id+'"]');
+          var suInput = document.querySelector('.gfp_diger_su[data-birim="'+s.birim.id+'"]');
+          istekler.push(window.api.saveSettings(s.birim.id, {
+            elektrikTuketimi: Number(elekInput ? elekInput.value : 0)||0,
+            suTuketimi: Number(suInput ? suInput.value : 0)||0
+          }));
+        });
         Promise.all(istekler).then(function(){
           showToast('Tüketim parametreleri kaydedildi.');
           renderGenelFabrikaParametreler(c);
@@ -2542,14 +2565,15 @@ function renderPanel(c){
   // Birimi'nin o ayki verisine (kg üretimi) ihtiyaç var — Bilanço'dakiyle BİREBİR AYNI mantık,
   // artık Panel'de de tutarlı şekilde gösteriliyor.
   var buNesil = RENDER_NESLI;
-  window.api.getBirimData('capak-uretim-birimi').then(function(capakVeri){
+  Promise.all([window.api.getBirimData('capak-uretim-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
     if(buNesil !== RENDER_NESLI) return;
+    var capakVeri = sonuc[0], personelListesi = sonuc[1];
     var monthCosts = monthly.map(computeCosts);
-    var monthMaliyetVar = bulAylikKapanis(monthKey) !== null && bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
+    var monthMaliyetVar = bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
     var monthCostTemel = monthCosts.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
     var ortakPay = 0;
     if(monthMaliyetVar){
-      ortakPay = ortakIscilikPayiHesapla(monthKey, STATE.birimVeri, capakVeri).granulPay;
+      ortakPay = ortakIscilikPayiHesapla(monthKey, STATE.birimVeri, capakVeri, personelListesi).granulPay;
     }
     var monthCost = monthCostTemel + ortakPay;
     var monthUnit = monthKg ? monthCost/monthKg : 0;
@@ -2645,16 +2669,18 @@ function renderCapakUretimPanel(c){
   renderBirimUretimGrafigi('ck_panel_grafik', STATE.birimVeri, STATE.aktifBirimId, 'kg');
 
   // "Bu Ayki Durum" kartı ASENKRON dolduruluyor — Ortak İşçilik Payı için Granül Birimi'nin o
-  // ayki verisine (kg üretimi + ortakIscilikAylikMaas) ihtiyaç var (Bilanço'dakiyle aynı mantık).
+  // ayki verisine (kg üretimi) VE merkezi Personel listesine (canlı "Ortak" maaş toplamı için)
+  // ihtiyaç var (Bilanço'dakiyle aynı mantık).
   var buNesil = RENDER_NESLI;
-  window.api.getBirimData('granul-birimi').then(function(granulVeri){
+  Promise.all([window.api.getBirimData('granul-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
     if(buNesil !== RENDER_NESLI) return;
+    var granulVeri = sonuc[0], personelListesi = sonuc[1];
     var monthCosts = monthly.map(function(cu){ return computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak')); });
-    var monthMaliyetVar = bulAylikKapanis(monthKey) !== null && bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
+    var monthMaliyetVar = bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
     var monthCostTemel = monthCosts.reduce(function(s,cs){ return s+cs.toplamMaliyet; },0);
     var ortakPay = 0;
     if(monthMaliyetVar){
-      ortakPay = ortakIscilikPayiHesapla(monthKey, granulVeri, STATE.birimVeri).capakPay;
+      ortakPay = ortakIscilikPayiHesapla(monthKey, granulVeri, STATE.birimVeri, personelListesi).capakPay;
     }
     var monthCost = monthCostTemel + ortakPay;
     var monthUnit = monthKg ? monthCost/monthKg : 0;
@@ -2774,11 +2800,34 @@ function renderDigerBirimPanel(c){
   });
 }
 
-function renderEntryTable(list, withActions, showNotes){
+// Bir kayıt listesindeki TÜM BENZERSİZ AYLAR için Ortak İşçilik Payı'nın TL/kg (ya da TL/adet)
+// ORANINI önceden hesaplayıp {ay: oran} haritası olarak döndürür — Kayıtlar tablosundaki HER
+// SATIR, kendi ait olduğu ayın oranını kullanabilsin diye (farklı aylar farklı kg oranına sahip olabilir).
+function ortakIscilikOranHaritasi(entries, tarihAlaniAdi, granulVeri, capakVeri, personelListesi, hangiTaraf){
+  var aylar = {};
+  entries.forEach(function(e){ if(e[tarihAlaniAdi]) aylar[e[tarihAlaniAdi].slice(0,7)] = true; });
+  var harita = {};
+  Object.keys(aylar).forEach(function(ay){
+    var pay = ortakIscilikPayiHesapla(ay, granulVeri, capakVeri, personelListesi);
+    var toplamPay = hangiTaraf==='granul' ? pay.granulPay : pay.capakPay;
+    var ayKg = hangiTaraf==='granul' ? pay.granulKg : pay.capakKg;
+    harita[ay] = ayKg ? toplamPay/ayKg : 0;
+  });
+  return harita;
+}
+
+// ortakOranHaritasi: {ay: TL/kg} — opsiyonel. Verilirse, her satırın kendi ait olduğu AYIN Ortak
+// İşçilik Payı oranı (Çapak+Granül arası paylaşılan personelin kg'ye bölünmüş payı) satırın
+// maliyetine EKLENİR — Panel/Bilanço ile TUTARLI bir "gerçek" toplam maliyet gösterilsin diye.
+function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
   var rows = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(function(e){
     var cst = computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
+    var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[e.tarih.slice(0,7)]) || 0;
+    var ekPay = ortakOran * (Number(e.kg)||0);
+    var gercekToplam = cst.toplamMaliyet + ekPay;
+    var gercekBirim = cst.birimMaliyet + ortakOran;
     var parasal = cst.maliyetGirildi
-      ? '<td>'+fmt(cst.toplamElektrik)+'</td><td>'+fmt(cst.toplamIscilik)+'</td><td>'+fmt(cst.toplamMaliyet)+'</td><td>'+fmt(cst.birimMaliyet)+'</td>'
+      ? '<td>'+fmt(cst.toplamElektrik)+'</td><td>'+fmt(cst.toplamIscilik + ekPay)+'</td><td>'+fmt(gercekToplam)+'</td><td>'+fmt(gercekBirim)+'</td>'
       : '<td colspan="4" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
     return '<tr>'+
       '<td class="txt">'+escapeHtml(tarihGoster(e.tarih))+'</td>'+
@@ -4058,22 +4107,28 @@ function renderBidonKayitlari(c){
 
 function renderBidonEntryTable(list){
   var rows = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(function(e){
+    var cst = computeBidonMaliyet(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
+    var parasal = cst.maliyetGirildi
+      ? '<td>'+fmt(cst.toplamMaliyet)+'</td><td>'+fmt(cst.birimMaliyet)+'</td>'
+      : '<td colspan="2" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
     return '<tr><td class="txt">'+escapeHtml(tarihGoster(e.tarih))+'</td>'+
       '<td class="txt">'+(e.vardiya==='gece'?'Gece':'Gündüz')+'</td>'+
       '<td class="txt"><span class="tag '+tagClassFor(e.urun)+'">'+escapeHtml(e.urun)+'</span></td>'+
       '<td>'+fmt(e.kg)+'</td>'+
       '<td>'+fmt(e.fireAdedi||0)+'</td>'+
       '<td>'+fmtKg(e.kullanilanCapak||0)+'</td>'+
+      parasal+
       '<td class="txt" style="max-width:150px; white-space:pre-wrap;">'+(escapeHtml(e.notlar)||'<span style="color:var(--muted);">—</span>')+'</td>'+
       '<td class="txt">'+escapeHtml(e.girenAd||'')+'</td>'+
       '<td style="white-space:nowrap;">'+(canMutate()?('<button class="btn ghost small" data-bu-edit="'+e.id+'">Düzenle</button> <button class="btn danger small" data-bu-del="'+e.id+'">Sil</button>'):'')+'</td></tr>';
   }).join('');
-  return '<table><thead><tr><th>Tarih</th><th>Vardiya</th><th>Bidon Tipi</th><th>Üretilen Adet</th><th>Fire Adedi</th><th>Kullanılan (kg)</th><th>Not</th><th>Giren</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+  return '<table><thead><tr><th>Tarih</th><th>Vardiya</th><th>Bidon Tipi</th><th>Üretilen Adet</th><th>Fire Adedi</th><th>Kullanılan (kg)</th><th>Toplam Maliyet (TL)</th><th>TL/adet</th><th>Not</th><th>Giren</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function renderGranulKayitlari(c){
   var products = STATE.merkeziCinsler.urunler.map(function(p){ return p.ad; });
   var currentFilteredList = [];
+  var ortakOranCache = {}; // {ay: TL/kg} — asenkron doldurulur, hazır olunca tablo yeniden çizilir
   c.innerHTML =
     '<div class="section-title" style="margin-top:0;">Üretilen Granül (Çapaktan)</div>'+
     '<div class="toolbar">'+
@@ -4105,7 +4160,7 @@ function renderGranulKayitlari(c){
     if(u) list = list.filter(function(x){ return x.urun===u; });
     currentFilteredList = list;
     var box = document.getElementById('kayit_table'); if(!box) return;
-    box.innerHTML = list.length===0 ? '<div class="empty"><b>Kayıt bulunamadı</b>Filtreleri temizleyin ya da yeni kayıt ekleyin.</div>' : renderEntryTable(list, true, true);
+    box.innerHTML = list.length===0 ? '<div class="empty"><b>Kayıt bulunamadı</b>Filtreleri temizleyin ya da yeni kayıt ekleyin.</div>' : renderEntryTable(list, true, true, ortakOranCache);
     Array.prototype.forEach.call(box.querySelectorAll('[data-edit]'), function(b){
       b.addEventListener('click', function(){
         var entry = STATE.birimVeri.entries.find(function(x){ return x.id===b.dataset.edit; });
@@ -4168,6 +4223,17 @@ function renderGranulKayitlari(c){
     }).catch(function(err){ alert(err.message); });
   });
   applyFilter();
+
+  // Ortak İşçilik Payı oranını (Çapak+Granül arası paylaşılan personelin kg'ye bölünmüş payı)
+  // asenkron hesaplayıp, hazır olunca tabloyu (aynı filtrelerle) YENİDEN çiziyoruz — Panel/Bilanço
+  // ile tutarlı bir "gerçek" maliyet gösterilsin diye.
+  var buNesilGK = RENDER_NESLI;
+  Promise.all([window.api.getBirimData('capak-uretim-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
+    if(buNesilGK !== RENDER_NESLI) return;
+    var capakVeri = sonuc[0], personelListesi = sonuc[1];
+    ortakOranCache = ortakIscilikOranHaritasi(STATE.birimVeri.entries, 'tarih', STATE.birimVeri, capakVeri, personelListesi, 'granul');
+    applyFilter();
+  }).catch(function(){ /* sessizce dene, Ortak İşçilik payı olmadan devam et */ });
 
   var granulSecenekleri = STATE.merkeziCinsler.urunler.map(function(p){ return p.ad; });
   function gkEkranSatir(g){
@@ -4244,13 +4310,21 @@ function renderAylikContentBidon(month){
   var parts = month.split('-'); var y = Number(parts[0]), m = Number(parts[1]);
   var daysInMonth = new Date(y, m, 0).getDate();
 
+  var kapanis = bulAylikKapanis(month);
+  var aylikFiyat = bulAylikFiyat(month, STATE.birimVeri);
+  var kapaliMi = !!aylikFiyat;
+  var costs = list.map(function(e){ return computeBidonMaliyet(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
+  var totalCost = costs.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
+  var unit = totalAdet ? totalCost/totalAdet : 0;
+
   var perUrun = {};
-  tumUrunlerBirlesik(STATE.birimVeri).forEach(function(p){ perUrun[p.ad] = {adet:0, fire:0, kullanilan:0, days:new Set()}; });
-  list.forEach(function(e){
-    if(!perUrun[e.urun]) perUrun[e.urun] = {adet:0, fire:0, kullanilan:0, days:new Set()};
+  tumUrunlerBirlesik(STATE.birimVeri).forEach(function(p){ perUrun[p.ad] = {adet:0, fire:0, kullanilan:0, cost:0, days:new Set()}; });
+  list.forEach(function(e,i){
+    if(!perUrun[e.urun]) perUrun[e.urun] = {adet:0, fire:0, kullanilan:0, cost:0, days:new Set()};
     perUrun[e.urun].adet += Number(e.kg);
     perUrun[e.urun].fire += Number(e.fireAdedi||0);
     perUrun[e.urun].kullanilan += Number(e.kullanilanCapak||0);
+    perUrun[e.urun].cost += costs[i].toplamMaliyet;
     perUrun[e.urun].days.add(e.tarih);
   });
 
@@ -4271,22 +4345,54 @@ function renderAylikContentBidon(month){
   }).join('');
 
   box.innerHTML =
-    '<div class="callout">Bu birimde adet bazlı üretim (Bidon Üretimi) takip edilir; elektrik/işçilik gibi bir maliyet modeli henüz yok, sadece üretim ve hammadde tüketimi gösterilir.</div>'+
+    '<div class="section-title" style="margin-top:0;">Bu Ayın Maliyet Parametreleri</div>'+
+    '<div class="card">'+
+      '<div class="note" style="margin-bottom:8px;">Elektrik/Su Fiyatı ve Aylık Çalışma Süresi artık <b>Genel Fabrika &gt; Parametreler</b>\'den, tüm fabrika için TEK bir yerden girilir.</div>'+
+      (aylikFiyat
+        ? '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
+            '<div><div class="note">Elektrik Fiyatı</div><b class="mono">'+fmt(aylikFiyat.elektrikFiyati)+' TL/KWH</b></div>'+
+            '<div><div class="note">Su Fiyatı</div><b class="mono">'+fmt(aylikFiyat.suFiyati)+' TL/m³</b></div>'+
+            '<div><div class="note">Aylık Çalışma Süresi</div><b class="mono">'+fmt(aylikFiyat.aylikCalismaSuresi)+' saat</b></div>'+
+          '</div>'
+        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için Genel Fabrika\'da henüz elektrik/su fiyatı girilmedi. <a id="ay_go_gf_param_bidon" style="color:var(--amber); cursor:pointer;">Genel Fabrika &gt; Parametreler\'e git</a></div>')+
+    '</div>'+
+    '<div class="card" id="kapanis_card" style="margin-top:14px;">'+
+      (kapanis
+        ? '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
+            '<div><div class="note">Bu Birimin İşçilik Gideri (bu ay)</div><b class="mono">'+fmt(kapanis.digerBirimIscilikMaas||0)+' TL</b></div>'+
+          '</div>'+
+          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Düzenle</button>'
+        : '<div class="callout warn">Bu ay için işçilik gideri henüz girilmedi (girmezseniz sadece elektrik/su maliyeti hesaplanır).</div>'+
+          '<button class="btn" id="kapanis_duzenle" style="margin-top:14px;">İşçilik Giderini Gir</button>')+
+      '<div id="kapanis_form" style="display:none; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">'+
+        '<div class="field"><label>Bu Birimin İşçilik Gideri — bu AYKİ toplam maaş (TL)</label><input type="number" step="100" id="bu_kap_iscilik" value="'+(kapanis?(kapanis.digerBirimIscilikMaas||0):0)+'"></div>'+
+        '<button type="button" class="btn ghost small" id="bu_kap_senkron" style="margin:-4px 0 10px;">↻ Genel Fabrika &gt; Personel\'deki bu birimin toplamıyla doldur</button>'+
+        '<div class="note" style="margin:-6px 0 13px;">Bu tutar, Genel Fabrika &gt; Personel\'de bu birime atanmış kişilerin toplam aylık maaşıdır — yukarıdaki butonla otomatik doldurabilir ya da elle girebilirsiniz.</div>'+
+        '<div class="note" style="margin-bottom:10px;">Değer, "Bu Ayı Kaydet"e bastığınız andaki tutarda SABİT kalır (geçmiş ayların maliyeti sonradan değişmesin diye).</div>'+
+        '<button class="btn" id="kapanis_kaydet">Bu Ayı Kaydet</button> '+
+        '<button class="btn ghost" id="kapanis_vazgec">Vazgeç</button>'+
+      '</div>'+
+    '</div>'+
     '<div class="grid grid-3" style="margin-top:16px;">'+
       '<div class="card"><h3>Toplam Üretilen</h3><div class="stat">'+fmt(totalAdet)+'<small>adet</small></div></div>'+
       '<div class="card"><h3>Toplam Fire</h3><div class="stat">'+fmt(totalFire)+'<small>adet</small></div></div>'+
       '<div class="card"><h3>Toplam Kullanılan Hammadde</h3><div class="stat">'+fmtKg(totalKullanilan)+'<small>kg</small></div></div>'+
+    '</div>'+
+    '<div class="grid grid-2" style="margin-top:16px;">'+
+      '<div class="card"><h3>Toplam Üretim Maliyeti (Elektrik+Su+İşçilik)</h3><div class="stat">'+(kapaliMi?fmt(totalCost):'—')+'<small>'+(kapaliMi?'TL':'girilmedi')+'</small></div></div>'+
+      '<div class="card"><h3>Ort. Birim Maliyet</h3><div class="stat">'+(kapaliMi?fmt(unit):'—')+'<small>'+(kapaliMi?'TL/adet':'girilmedi')+'</small></div></div>'+
     '</div>'+
     '<div class="section-title">Üretim Yapılan Gün: '+daysWithProd+' / '+daysInMonth+'</div>'+
     (daysWithProd<daysInMonth ? '<div class="callout">Bu ay <b class="mono">'+(daysInMonth-daysWithProd)+'</b> gün hiç üretim kaydı girilmemiş.</div>' : '<div class="callout">Ayın her günü için üretim kaydı girilmiş.</div>')+
     '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
       '<span>Ürün Bazlı Özet</span><button class="btn ghost small" id="bu_aylik_pdf_btn">PDF Olarak Dışa Aktar</button>'+
     '</div>'+
-    '<div class="card"><table><thead><tr><th>Bidon Tipi</th><th>Üretilen (adet)</th><th>Fire (adet)</th><th>Kullanılan Hammadde (kg)</th><th>Üretim Günü</th></tr></thead><tbody>'+
+    '<div class="card"><table><thead><tr><th>Bidon Tipi</th><th>Üretilen (adet)</th><th>Fire (adet)</th><th>Kullanılan Hammadde (kg)</th><th>Üretim Maliyeti (TL)</th><th>Üretim Günü</th></tr></thead><tbody>'+
       Object.keys(perUrun).map(function(ad){
         var v = perUrun[ad];
         return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
           '<td>'+fmt(v.adet)+'</td><td>'+fmt(v.fire)+'</td><td>'+fmtKg(v.kullanilan)+'</td>'+
+          '<td>'+(kapaliMi?fmt(v.cost):'—')+'</td>'+
           '<td>'+(v.adet?v.days.size:'<span style="color:var(--danger)">üretilmedi</span>')+'</td></tr>';
       }).join('')+
     '</tbody></table></div>'+
@@ -4322,12 +4428,12 @@ function renderAylikContentBidon(month){
       baslik: aktifBirimAdi()+' — Aylık Rapor ('+ayGoster(month)+')',
       sutunlar: [
         {key:'urun', label:'Bidon Tipi'}, {key:'adet', label:'Üretilen (adet)'}, {key:'fire', label:'Fire (adet)'},
-        {key:'kullanilan', label:'Kullanılan Hammadde (kg)'}, {key:'gun', label:'Üretim Günü'}
+        {key:'kullanilan', label:'Kullanılan Hammadde (kg)'}, {key:'cost', label:'Üretim Maliyeti (TL)'}, {key:'gun', label:'Üretim Günü'}
       ],
       kayitlarGetir: function(){
         return Object.keys(perUrun).map(function(ad){
           var v = perUrun[ad];
-          return { urun: ad, adet: v.adet, fire: v.fire, kullanilan: v.kullanilan, gun: v.days.size };
+          return { urun: ad, adet: v.adet, fire: v.fire, kullanilan: v.kullanilan, cost: v.cost, gun: v.days.size };
         });
       },
       satirDegeri: function(p, key){
@@ -4340,6 +4446,33 @@ function renderAylikContentBidon(month){
         return [{etiket:'Toplam Üretilen', deger:fmt(totalAdet)+' adet'}, {etiket:'Toplam Kullanılan Hammadde', deger:fmtKg(totalKullanilan)+' kg'}];
       }
     });
+  });
+
+  (document.getElementById('kapanis_duzenle')||{addEventListener:function(){}}).addEventListener('click', function(){
+    document.getElementById('kapanis_form').style.display = 'block';
+  });
+  var vazgecBtnBidon = document.getElementById('kapanis_vazgec');
+  if(vazgecBtnBidon) vazgecBtnBidon.addEventListener('click', function(){ document.getElementById('kapanis_form').style.display = 'none'; });
+  (document.getElementById('ay_go_gf_param_bidon')||{addEventListener:function(){}}).addEventListener('click', genelFabrikaParametrelerineGit);
+  (document.getElementById('bu_kap_senkron')||{addEventListener:function(){}}).addEventListener('click', function(){
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Yükleniyor…';
+    window.api.getPersonelListesi().then(function(personelListesi){
+      var toplam = (personelListesi||[]).filter(function(p){ return p.birimHedefi === STATE.aktifBirimId; })
+        .reduce(function(s,p){ return s+(Number(p.maas)||0); }, 0);
+      document.getElementById('bu_kap_iscilik').value = toplam;
+      showToast('Bu birime atanmış personel toplamıyla dolduruldu ('+fmt(toplam)+' TL) — kalıcı olması için "Bu Ayı Kaydet"e basmayı unutmayın.');
+      btn.disabled = false; btn.textContent = '↻ Genel Fabrika > Personel\'deki bu birimin toplamıyla doldur';
+    }).catch(function(err){ alert(err.message); btn.disabled = false; btn.textContent = '↻ Genel Fabrika > Personel\'deki bu birimin toplamıyla doldur'; });
+  });
+  (document.getElementById('kapanis_kaydet')||{addEventListener:function(){}}).addEventListener('click', function(){
+    var obj = {
+      digerBirimIscilikMaas: Number((document.getElementById('bu_kap_iscilik')||{value:0}).value)
+    };
+    window.api.saveAylikKapanis(STATE.aktifBirimId, month, obj).then(function(kapanislar){
+      STATE.birimVeri.aylikKapanislar = kapanislar;
+      renderAylikContentBidon(month);
+    }).catch(function(err){ alert(err.message); });
   });
 }
 
@@ -4357,7 +4490,7 @@ function renderAylikContentCapak(month){
   var daysWithProd = new Set(list.map(function(cu){ return cu.tarih; })).size;
   var kapanis = bulAylikKapanis(month);
   var aylikFiyat = bulAylikFiyat(month, STATE.birimVeri);
-  var kapaliMi = !!kapanis && !!aylikFiyat;
+  var kapaliMi = !!aylikFiyat; // SADECE elektrik/su fiyati zorunlu -- kendi maas kaydi (kapanis) eksik olsa bile (orn. tum personel "Ortak" ise) hesap yapilabilir.
 
   var totalUretilen = list.reduce(function(s2,cu){ return s2+Number(cu.uretilenCapak); },0);
   var totalKullanilan = list.reduce(function(s2,cu){ return s2+Number(cu.kullanilanHurda); },0);
@@ -4365,8 +4498,7 @@ function renderAylikContentCapak(month){
   var toplamFirePct = totalKullanilan ? (toplamFire/totalKullanilan*100) : 0;
 
   var costs = list.map(function(cu){ return computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak')); });
-  var totalCost = costs.reduce(function(s2,c){ return s2+c.toplamMaliyet; },0);
-  var unit = totalUretilen ? totalCost/totalUretilen : 0;
+  var totalCostTemel = costs.reduce(function(s2,c){ return s2+c.toplamMaliyet; },0);
 
   var perProduct = {};
   STATE.merkeziCinsler.capakCinsleri.forEach(function(p){ perProduct[p.ad] = {uretilen:0, kullanilan:0, cost:0, days:new Set()}; });
@@ -4381,125 +4513,141 @@ function renderAylikContentCapak(month){
   var notProduced = Object.keys(perProduct).filter(function(k){ return perProduct[k].uretilen===0; });
 
   box.innerHTML =
-    '<div class="section-title" style="margin-top:0;">Bu Ayın Maliyet Parametreleri (Sulu Kırma Hattı)</div>'+
+    '<div class="section-title" style="margin-top:0;">Bu Ayin Maliyet Parametreleri (Sulu Kirma Hatti)</div>'+
     '<div class="card">'+
-      '<div class="note" style="margin-bottom:8px;">Elektrik/Su Fiyatı ve Aylık Çalışma Süresi artık <b>Genel Fabrika &gt; Parametreler</b>\'den, tüm fabrika için TEK bir yerden girilir.</div>'+
+      '<div class="note" style="margin-bottom:8px;">Elektrik/Su Fiyati ve Aylik Calisma Suresi artik <b>Genel Fabrika &gt; Parametreler</b>\'den, tum fabrika icin TEK bir yerden girilir.</div>'+
       (aylikFiyat
         ? '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
-            '<div><div class="note">Elektrik Fiyatı</div><b class="mono">'+fmt(aylikFiyat.elektrikFiyati)+' TL/KWH</b></div>'+
-            '<div><div class="note">Su Fiyatı</div><b class="mono">'+fmt(aylikFiyat.suFiyati)+' TL/m³</b></div>'+
-            '<div><div class="note">Aylık Çalışma Süresi</div><b class="mono">'+fmt(aylikFiyat.aylikCalismaSuresi)+' saat</b></div>'+
+            '<div><div class="note">Elektrik Fiyati</div><b class="mono">'+fmt(aylikFiyat.elektrikFiyati)+' TL/KWH</b></div>'+
+            '<div><div class="note">Su Fiyati</div><b class="mono">'+fmt(aylikFiyat.suFiyati)+' TL/m3</b></div>'+
+            '<div><div class="note">Aylik Calisma Suresi</div><b class="mono">'+fmt(aylikFiyat.aylikCalismaSuresi)+' saat</b></div>'+
           '</div>'
-        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için Genel Fabrika\'da henüz elektrik/su fiyatı girilmedi. <a id="ay_go_gf_param" style="color:var(--amber); cursor:pointer;">Genel Fabrika &gt; Parametreler\'e git</a></div>')+
+        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) icin Genel Fabrika\'da henuz elektrik/su fiyati girilmedi. <a id="ay_go_gf_param" style="color:var(--amber); cursor:pointer;">Genel Fabrika &gt; Parametreler\'e git</a></div>')+
     '</div>'+
     '<div class="card" id="kapanis_card" style="margin-top:14px;">'+
       (kapanis
         ? '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
-            '<div><div class="note">Sulu Kırma Hattı Gündüz/Gece</div><b class="mono">'+fmt(kapanis.suluKirmaGunduzMaas)+' / '+fmt(kapanis.suluKirmaGeceMaas)+' TL</b></div>'+
+            '<div><div class="note">Sulu Kirma Hatti Gunduz/Gece</div><b class="mono">'+fmt(kapanis.suluKirmaGunduzMaas)+' / '+fmt(kapanis.suluKirmaGeceMaas)+' TL</b></div>'+
           '</div>'+
-          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Düzenle</button>'
-        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için bu birimin maaş parametreleri henüz girilmedi. Üretim kayıtları normal girilebilir; maliyet hesabı bu parametreler girilince otomatik oluşur.</div>'+
-          '<button class="btn" id="kapanis_duzenle" style="margin-top:14px;">Maaş Parametrelerini Gir</button>')+
+          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Duzenle</button>'
+        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) icin bu birimin KENDI maas parametreleri henuz girilmedi. Eger TUM personel Granul Birimi ile "Ortak" ise, bu alana hic gerek yok.</div>'+
+          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Sulu Kirma Maasi Gir (opsiyonel)</button>')+
       '<div id="kapanis_form" style="display:none; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">'+
-        '<div class="note" style="margin-bottom:10px;">Maaşlar her ay değişebildiği için bu alanlar her yeni ayda BOŞ/SIFIR başlar — her ay için yeniden girmeniz gerekir (bir önceki aydan otomatik kopyalanmaz).</div>'+
+        '<div class="note" style="margin-bottom:10px;">Maaslar her ay degisebildigi icin bu alanlar her yeni ayda BOS/SIFIR baslar -- her ay icin yeniden girmeniz gerekir (bir onceki aydan otomatik kopyalanmaz).</div>'+
         '<div class="row">'+
-          '<div class="field"><label>Sulu Kırma Hattı Gündüz Maaşı (TL)</label><input type="number" step="100" id="kap_sk_gunduz" value="'+(kapanis?kapanis.suluKirmaGunduzMaas:0)+'"></div>'+
-          '<div class="field"><label>Sulu Kırma Hattı Gece Maaşı (TL)</label><input type="number" step="100" id="kap_sk_gece" value="'+(kapanis?kapanis.suluKirmaGeceMaas:0)+'"></div>'+
+          '<div class="field"><label>Sulu Kirma Hatti Gunduz Maasi (TL)</label><input type="number" step="100" id="kap_sk_gunduz" value="'+(kapanis?kapanis.suluKirmaGunduzMaas:0)+'"></div>'+
+          '<div class="field"><label>Sulu Kirma Hatti Gece Maasi (TL)</label><input type="number" step="100" id="kap_sk_gece" value="'+(kapanis?kapanis.suluKirmaGeceMaas:0)+'"></div>'+
         '</div>'+
-        '<div class="callout" style="margin-bottom:10px;">Bu personel Granül Birimi ile ORTAK (aynı kişiler) ise, yukarıdaki 2 alanı <b>0 bırakın</b> — o kişilerin maliyeti, Granül Birimi\'nin Aylık Kapanış\'ındaki "Ortak İşçilik" alanından otomatik olarak buraya da yansır (kg oranına göre). Buraya AYRICA bir tutar girerseniz, aynı maaş ÇİFT SAYILIR.</div>'+
-        '<div class="note" style="margin-bottom:10px;">Maaş değerleri, "Bu Ayı Kaydet"e bastığınız andaki tutarda SABİT kalır (geçmiş ayların maliyeti sonradan değişmesin diye).</div>'+
-        '<button class="btn" id="kapanis_kaydet">Bu Ayı Kaydet</button> '+
-        '<button class="btn ghost" id="kapanis_vazgec">Vazgeç</button>'+
+        '<div class="callout" style="margin-bottom:10px;">Bu personel Granul Birimi ile ORTAK (ayni kisiler) ise, yukaridaki 2 alani <b>0 birakin</b> -- o kisilerin maliyeti Genel Fabrika &gt; Personel\'den OTOMATIK hesaplanir (asagida gosterilir). Buraya AYRICA bir tutar girerseniz, ayni maas CIFT SAYILIR.</div>'+
+        '<div class="note" style="margin-bottom:10px;">Maas degerleri, "Bu Ayi Kaydet"e bastiginiz andaki tutarda SABIT kalir (gecmis aylarin maliyeti sonradan degismesin diye).</div>'+
+        '<button class="btn" id="kapanis_kaydet">Bu Ayi Kaydet</button> '+
+        '<button class="btn ghost" id="kapanis_vazgec">Vazgec</button>'+
       '</div>'+
     '</div>'+
+    '<div class="card" style="margin-top:14px;"><h3 style="margin-bottom:6px;">Ortak Iscilik (Granul Birimi ile Paylasilan)</h3>'+
+      '<div id="ay_ortak_iscilik_gosterim"><div class="note">Hesaplaniyor...</div></div>'+
+    '</div>'+
     '<div class="grid grid-3" style="margin-top:20px;">'+
-      '<div class="card"><h3>Toplam Üretilen '+escapeHtml(basliklar.capak)+'</h3><div class="stat">'+fmtKg(totalUretilen)+'<small>kg</small></div></div>'+
-      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+(kapaliMi?fmt(totalCost):'—')+'<small>'+(kapaliMi?'TL':'girilmedi')+'</small></div></div>'+
-      '<div class="card"><h3>Ort. Birim Maliyet</h3><div class="stat">'+(kapaliMi?fmt(unit):'—')+'<small>'+(kapaliMi?'TL/kg':'girilmedi')+'</small></div></div>'+
+      '<div class="card"><h3>Toplam Uretilen '+escapeHtml(basliklar.capak)+'</h3><div class="stat">'+fmtKg(totalUretilen)+'<small>kg</small></div></div>'+
+      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat" id="ay_toplam_maliyet_stat">'+(kapaliMi?fmt(totalCostTemel):'--')+'<small>'+(kapaliMi?'TL':'girilmedi')+'</small></div></div>'+
+      '<div class="card"><h3>Ort. Birim Maliyet</h3><div class="stat" id="ay_ort_birim_stat">'+(kapaliMi && totalUretilen?fmt(totalCostTemel/totalUretilen):'--')+'<small>'+(kapaliMi?'TL/kg':'girilmedi')+'</small></div></div>'+
     '</div>'+
     '<div class="grid grid-3" style="margin-top:16px;">'+
-      '<div class="card"><h3>Toplam Kullanılan '+escapeHtml(basliklar.hurda)+'</h3><div class="stat">'+fmtKg(totalKullanilan)+'<small>kg</small></div></div>'+
+      '<div class="card"><h3>Toplam Kullanilan '+escapeHtml(basliklar.hurda)+'</h3><div class="stat">'+fmtKg(totalKullanilan)+'<small>kg</small></div></div>'+
       '<div class="card"><h3>Fire</h3><div class="stat" style="color:'+(toplamFire<0?'var(--danger)':'var(--amber)')+';">'+fmt(toplamFirePct)+'<small>%</small></div></div>'+
     '</div>'+
-    '<div class="section-title">Üretim Yapılan Gün: '+daysWithProd+' / '+daysInMonth+'</div>'+
-    (daysWithProd<daysInMonth ? '<div class="callout">Bu ay <b class="mono">'+(daysInMonth-daysWithProd)+'</b> gün hiç üretim kaydı girilmemiş.</div>' : '<div class="callout">Ayın her günü için üretim kaydı girilmiş.</div>')+
+    '<div class="section-title">Uretim Yapilan Gun: '+daysWithProd+' / '+daysInMonth+'</div>'+
+    (daysWithProd<daysInMonth ? '<div class="callout">Bu ay <b class="mono">'+(daysInMonth-daysWithProd)+'</b> gun hic uretim kaydi girilmemis.</div>' : '<div class="callout">Ayin her gunu icin uretim kaydi girilmis.</div>')+
     '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
-      '<span>Ürün Bazlı Özet</span><button class="btn ghost small" id="aylik_pdf_btn">PDF Olarak Dışa Aktar</button>'+
+      '<span>Urun Bazli Ozet</span><button class="btn ghost small" id="aylik_pdf_btn">PDF Olarak Disa Aktar</button>'+
     '</div>'+
-    '<div class="card"><table><thead><tr><th>'+escapeHtml(basliklar.capak)+'</th><th>Üretilen (kg)</th><th>Kullanılan '+escapeHtml(basliklar.hurda)+' (kg)</th><th>Fire (%)</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Üretim Günü</th></tr></thead><tbody>'+
+    '<div class="card" id="ay_urun_tablo_wrap"><table><thead><tr><th>'+escapeHtml(basliklar.capak)+'</th><th>Uretilen (kg)</th><th>Kullanilan '+escapeHtml(basliklar.hurda)+' (kg)</th><th>Fire (%)</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Uretim Gunu</th></tr></thead><tbody>'+
       Object.keys(perProduct).map(function(ad){
         var v = perProduct[ad];
         var fire = v.kullanilan - v.uretilen;
         var firePct = v.kullanilan ? (fire/v.kullanilan*100) : 0;
         return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
           '<td>'+fmtKg(v.uretilen)+'</td><td>'+fmtKg(v.kullanilan)+'</td>'+
-          '<td>'+(v.kullanilan?('<b style="color:'+(fire<0?'var(--danger)':'var(--amber)')+';">'+fmt(firePct)+'%</b>'):'—')+'</td>'+
-          '<td>'+(kapaliMi?fmt(v.cost):'—')+'</td>'+
-          '<td>'+(kapaliMi && v.uretilen?fmt(v.cost/v.uretilen):'—')+'</td>'+
-          '<td>'+(v.uretilen?v.days.size:'<span style="color:var(--danger)">üretilmedi</span>')+'</td></tr>';
+          '<td>'+(v.kullanilan?('<b style="color:'+(fire<0?'var(--danger)':'var(--amber)')+';">'+fmt(firePct)+'%</b>'):'--')+'</td>'+
+          '<td>'+(kapaliMi?fmt(v.cost):'--')+'</td>'+
+          '<td>'+(kapaliMi && v.uretilen?fmt(v.cost/v.uretilen):'--')+'</td>'+
+          '<td>'+(v.uretilen?v.days.size:'<span style="color:var(--danger)">uretilmedi</span>')+'</td></tr>';
       }).join('')+
     '</tbody></table></div>'+
-    (notProduced.length>0 ? '<div class="callout warn" style="margin-top:12px;"><b style="display:block;margin-bottom:4px;">Bu ay üretilmeyen '+escapeHtml(basliklar.capak)+':</b>'+notProduced.map(escapeHtml).join(', ')+'</div>' : '')+
-    '<div class="section-title">Bu Aya Ait Kayıtlar</div>'+
-    '<div class="card">'+(list.length===0?'<div class="empty"><b>Bu ay için kayıt yok</b></div>':renderCapakUretimKayitTablosu(list, kapaliMi))+'</div>';
+    (notProduced.length>0 ? '<div class="callout warn" style="margin-top:12px;"><b style="display:block;margin-bottom:4px;">Bu ay uretilmeyen '+escapeHtml(basliklar.capak)+':</b>'+notProduced.map(escapeHtml).join(', ')+'</div>' : '')+
+    '<div class="section-title">Bu Aya Ait Kayitlar</div>'+
+    '<div class="card" id="ay_kayitlar_tablo_wrap">'+(list.length===0?'<div class="empty"><b>Bu ay icin kayit yok</b></div>':renderCapakUretimKayitTablosu(list, kapaliMi))+'</div>';
 
-  (document.getElementById('aylik_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
-    pdfDisaAktarPenceresiAc({
-      baslik: aktifBirimAdi()+' — Aylık Rapor ('+ayGoster(month)+')',
-      sutunlar: [
-        {key:'urun', label:basliklar.capak}, {key:'uretilen', label:'Üretilen (kg)'},
-        {key:'kullanilan', label:'Kullanılan '+basliklar.hurda+' (kg)'}, {key:'fire', label:'Fire (%)'},
-        {key:'cost', label:'Toplam Maliyet (TL)'}, {key:'birim', label:'Ort. Birim (TL/kg)'}, {key:'gun', label:'Üretim Günü'}
-      ],
-      kayitlarGetir: function(){
-        return Object.keys(perProduct).map(function(ad){
+  // Ortak Iscilik Payi: Granul Birimi'nin o ayki kg uretimine VE merkezi Personel listesindeki
+  // "Ortak" toplamina ihtiyac var -- asenkron hesaplanip, hazir olunca kartlar, Urun Bazli Ozet
+  // tablosu ve Kayitlar tablosu TEKRAR (Ortak Iscilik dahil edilerek) cizilir. TAMAMEN OTOMATIKTIR.
+  var buNesilARC = RENDER_NESLI;
+  Promise.all([window.api.getBirimData('granul-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
+    if(buNesilARC !== RENDER_NESLI) return;
+    var granulVeri = sonuc[0], personelListesi = sonuc[1];
+    var ortak = kapaliMi ? ortakIscilikPayiHesapla(month, granulVeri, STATE.birimVeri, personelListesi) : {capakPay:0};
+    var ortakPay = ortak.capakPay;
+    var ortakOran = totalUretilen ? ortakPay/totalUretilen : 0;
+
+    var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
+    if(gosterimBox){
+      gosterimBox.innerHTML = ortakPay>0
+        ? '<div class="note">Bu ay Genel Fabrika &gt; Personel\'de "Ortak" isaretli personelin toplam maasi: <b class="mono" style="color:var(--text);">'+fmt(ortak.ortakMaas)+' TL</b>. Granul '+fmt(ortak.granulKg)+' kg / Capak '+fmt(ortak.capakKg)+' kg uretmis -- bu birime dusen pay: <b class="mono" style="color:var(--text);">'+fmt(ortakPay)+' TL</b> (asagidaki toplamlara otomatik eklendi).</div>'
+        : '<div class="note">Genel Fabrika &gt; Personel\'de "Capak Uretim Birimi ve Granul Birimi (Ortak)" isaretli personel yok (ya da bu ay hic uretim yapilmamis) -- ek bir pay hesaplanmadi.</div>';
+    }
+
+    if(!kapaliMi) return;
+
+    var totalCost = totalCostTemel + ortakPay;
+    var unit = totalUretilen ? totalCost/totalUretilen : 0;
+    var totalStat = document.getElementById('ay_toplam_maliyet_stat');
+    if(totalStat) totalStat.innerHTML = fmt(totalCost)+'<small>TL'+(ortakPay>0?' -- Ortak dahil':'')+'</small>';
+    var unitStat = document.getElementById('ay_ort_birim_stat');
+    if(unitStat) unitStat.innerHTML = fmt(unit)+'<small>TL/kg</small>';
+
+    var tabloWrap = document.getElementById('ay_urun_tablo_wrap');
+    if(tabloWrap){
+      tabloWrap.innerHTML = '<table><thead><tr><th>'+escapeHtml(basliklar.capak)+'</th><th>Uretilen (kg)</th><th>Kullanilan '+escapeHtml(basliklar.hurda)+' (kg)</th><th>Fire (%)</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Uretim Gunu</th></tr></thead><tbody>'+
+        Object.keys(perProduct).map(function(ad){
           var v = perProduct[ad];
-          var fire = v.kullanilan ? ((v.kullanilan-v.uretilen)/v.kullanilan*100) : 0;
-          return { urun: ad, uretilen: v.uretilen, kullanilan: v.kullanilan, fire: fire, cost: v.cost, birim: v.uretilen?v.cost/v.uretilen:0, gun: v.days.size };
-        });
-      },
-      satirDegeri: function(p, key){
-        if(key === 'uretilen' || key === 'kullanilan') return fmtKg(p[key]);
-        if(key === 'fire') return p.kullanilan ? fmt(p.fire)+'%' : '—';
-        if(key === 'cost') return kapaliMi ? fmt(p.cost) : 'girilmedi';
-        if(key === 'birim') return (kapaliMi && p.uretilen) ? fmt(p.birim) : '—';
-        if(key === 'gun') return p.uretilen ? String(p.gun) : 'üretilmedi';
-        return p[key] || '';
-      },
-      ozetSatirlari: function(){
-        return [{etiket:'Toplam Üretilen', deger:fmtKg(totalUretilen)+' kg'}, {etiket:'Toplam Maliyet', deger:kapaliMi?fmt(totalCost)+' TL':'girilmedi'}];
-      }
-    });
-  });
+          var fire = v.kullanilan - v.uretilen;
+          var firePct = v.kullanilan ? (fire/v.kullanilan*100) : 0;
+          var vCost = v.cost + (v.uretilen * ortakOran);
+          return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
+            '<td>'+fmtKg(v.uretilen)+'</td><td>'+fmtKg(v.kullanilan)+'</td>'+
+            '<td>'+(v.kullanilan?('<b style="color:'+(fire<0?'var(--danger)':'var(--amber)')+';">'+fmt(firePct)+'%</b>'):'--')+'</td>'+
+            '<td>'+fmt(vCost)+'</td>'+
+            '<td>'+(v.uretilen?fmt(vCost/v.uretilen):'--')+'</td>'+
+            '<td>'+(v.uretilen?v.days.size:'<span style="color:var(--danger)">uretilmedi</span>')+'</td></tr>';
+        }).join('')+
+      '</tbody></table>';
+    }
 
-  (document.getElementById('kapanis_duzenle')||{addEventListener:function(){}}).addEventListener('click', function(){
-    document.getElementById('kapanis_form').style.display = 'block';
-  });
-  var vazgecBtn = document.getElementById('kapanis_vazgec');
-  if(vazgecBtn) vazgecBtn.addEventListener('click', function(){ document.getElementById('kapanis_form').style.display = 'none'; });
-  (document.getElementById('ay_go_gf_param')||{addEventListener:function(){}}).addEventListener('click', genelFabrikaParametrelerineGit);
-  (document.getElementById('kapanis_kaydet')||{addEventListener:function(){}}).addEventListener('click', function(){
-    var obj = {
-      suluKirmaGunduzMaas: Number((document.getElementById('kap_sk_gunduz')||{value:''}).value),
-      suluKirmaGeceMaas: Number((document.getElementById('kap_sk_gece')||{value:''}).value)
-    };
-    window.api.saveAylikKapanis(STATE.aktifBirimId, month, obj).then(function(kapanislar){
-      STATE.birimVeri.aylikKapanislar = kapanislar;
-      renderAylikContentCapak(month);
-    }).catch(function(err){ alert(err.message); });
+    var kayitlarWrap = document.getElementById('ay_kayitlar_tablo_wrap');
+    if(kayitlarWrap && list.length>0){
+      var oranHaritasi = {}; oranHaritasi[month] = ortakOran;
+      kayitlarWrap.innerHTML = renderCapakUretimKayitTablosu(list, kapaliMi, oranHaritasi);
+    }
+  }).catch(function(err){
+    var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
+    if(gosterimBox) gosterimBox.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
   });
 }
 
 // Çapak Üretim Birimi'nin Aylık Rapor'undaki "Bu Aya Ait Kayıtlar" tablosu — vardiya ve maliyet
 // (Sulu Kırma Hattı) bilgisi dahil. renderEntryTable'dan (Granül'e özel alanlar içerir) ayrı tutulur.
-function renderCapakUretimKayitTablosu(list, kapaliMi){
+function renderCapakUretimKayitTablosu(list, kapaliMi, ortakOranHaritasi){
   var rows = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(function(cu){
     var hc = cu.hurdaCinsi || cu.urun, cc = cu.capakCinsi || cu.urun;
     var fire = Number(cu.kullanilanHurda) - Number(cu.uretilenCapak);
     var firePct = cu.kullanilanHurda ? (fire/cu.kullanilanHurda*100) : 0;
     var cst = computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak'));
+    var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[cu.tarih.slice(0,7)]) || 0;
+    var ekPay = ortakOran * (Number(cu.uretilenCapak)||0);
+    var gercekToplam = cst.toplamMaliyet + ekPay;
+    var gercekBirim = cst.birimMaliyet + ortakOran;
     var parasal = cst.maliyetGirildi
-      ? '<td>'+fmt(cst.elektrikMaliyeti)+'</td><td>'+fmt(cst.suMaliyeti)+'</td><td>'+fmt(cst.iscilikMaliyeti)+'</td><td>'+fmt(cst.toplamMaliyet)+'</td><td>'+fmt(cst.birimMaliyet)+'</td>'
+      ? '<td>'+fmt(cst.elektrikMaliyeti)+'</td><td>'+fmt(cst.suMaliyeti)+'</td><td>'+fmt(cst.iscilikMaliyeti + ekPay)+'</td><td>'+fmt(gercekToplam)+'</td><td>'+fmt(gercekBirim)+'</td>'
       : '<td colspan="5" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
     return '<tr><td class="txt">'+escapeHtml(tarihGoster(cu.tarih))+'</td>'+
       '<td class="txt"><span class="tag '+(cu.vardiya==='gece'?'gece':'gunduz')+'">'+(cu.vardiya==='gece'?'Gece':'Gündüz')+'</span></td>'+
@@ -4519,15 +4667,14 @@ function renderAylikContent(month){
   var daysInMonth = new Date(y, m, 0).getDate();
   var kapanis = bulAylikKapanis(month);
   var aylikFiyat = bulAylikFiyat(month, STATE.birimVeri);
-  var kapaliMi = !!kapanis && !!aylikFiyat;
+  var kapaliMi = !!aylikFiyat; // SADECE elektrik fiyatı zorunlu -- kendi maas kaydi (kapanis) eksik olsa bile (orn. tum personel "Ortak" ise) hesap yapilabilir, o kisim guvenle 0 sayilir.
 
   var totalKg = list.reduce(function(s,e){ return s+Number(e.kg); },0);
   var costs = list.map(function(e){ return computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
-  var totalCost = costs.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
+  var totalCostTemel = costs.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
   var totalElek = costs.reduce(function(s,c){ return s+c.toplamElektrik; },0);
   var totalIsc = costs.reduce(function(s,c){ return s+c.toplamIscilik; },0);
   var totalSure = costs.reduce(function(s,c){ return s+c.sure; },0);
-  var unit = totalKg ? totalCost/totalKg : 0;
   var avgVerim = totalSure ? totalKg/totalSure : 0;
   var daysWithProd = new Set(list.map(function(e){ return e.tarih; })).size;
 
@@ -4541,79 +4688,130 @@ function renderAylikContent(month){
   });
   var notProduced = Object.keys(perProduct).filter(function(k){ return perProduct[k].kg===0; });
 
-  var s = STATE.birimVeri.settings; // sadece Vardiya Süresi/Aylık Çalışma Süresi gibi yapısal alanlar için
+  var s = STATE.birimVeri.settings; // sadece Vardiya Suresi gibi yapisal alanlar icin
 
   box.innerHTML =
-    '<div class="section-title">Bu Ayın Maliyet Parametreleri</div>'+
+    '<div class="section-title">Bu Ayin Maliyet Parametreleri</div>'+
     '<div class="card">'+
-      '<div class="note" style="margin-bottom:8px;">Elektrik Fiyatı ve Aylık Çalışma Süresi artık <b>Genel Fabrika &gt; Parametreler</b>\'den, tüm fabrika için TEK bir yerden girilir.</div>'+
+      '<div class="note" style="margin-bottom:8px;">Elektrik Fiyati ve Aylik Calisma Suresi artik <b>Genel Fabrika &gt; Parametreler</b>\'den, tum fabrika icin TEK bir yerden girilir.</div>'+
       (aylikFiyat
         ? '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
-            '<div><div class="note">Elektrik Fiyatı</div><b class="mono">'+fmt(aylikFiyat.elektrikFiyati)+' TL/KWH</b></div>'+
-            '<div><div class="note">Aylık Çalışma Süresi</div><b class="mono">'+fmt(aylikFiyat.aylikCalismaSuresi)+' saat</b></div>'+
+            '<div><div class="note">Elektrik Fiyati</div><b class="mono">'+fmt(aylikFiyat.elektrikFiyati)+' TL/KWH</b></div>'+
+            '<div><div class="note">Aylik Calisma Suresi</div><b class="mono">'+fmt(aylikFiyat.aylikCalismaSuresi)+' saat</b></div>'+
           '</div>'
-        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için Genel Fabrika\'da henüz elektrik fiyatı girilmedi. <a id="ay_go_gf_param" style="color:var(--amber); cursor:pointer;">Genel Fabrika &gt; Parametreler\'e git</a></div>')+
+        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) icin Genel Fabrika\'da henuz elektrik fiyati girilmedi. <a id="ay_go_gf_param" style="color:var(--amber); cursor:pointer;">Genel Fabrika &gt; Parametreler\'e git</a></div>')+
     '</div>'+
     '<div class="card" id="kapanis_card" style="margin-top:14px;">'+
       (kapanis
         ? '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
-            '<div><div class="note">Agromel Gündüz/Gece</div><b class="mono">'+fmt(kapanis.agromelGunduzMaas)+' / '+fmt(kapanis.agromelGeceMaas)+' TL</b></div>'+
-            '<div><div class="note">Granül Gündüz/Gece</div><b class="mono">'+fmt(kapanis.granulGunduzMaas)+' / '+fmt(kapanis.granulGeceMaas)+' TL</b></div>'+
-            (Number(kapanis.ortakIscilikAylikMaas) ? '<div><div class="note">Ortak İşçilik (Çapak+Granül)</div><b class="mono">'+fmt(kapanis.ortakIscilikAylikMaas)+' TL/ay</b></div>' : '')+
+            '<div><div class="note">Agromel Gunduz/Gece</div><b class="mono">'+fmt(kapanis.agromelGunduzMaas)+' / '+fmt(kapanis.agromelGeceMaas)+' TL</b></div>'+
+            '<div><div class="note">Granul Gunduz/Gece</div><b class="mono">'+fmt(kapanis.granulGunduzMaas)+' / '+fmt(kapanis.granulGeceMaas)+' TL</b></div>'+
           '</div>'+
-          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Düzenle</button>'
-        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için bu birimin maaş parametreleri henüz girilmedi. Üretim kayıtları normal girilebilir; maliyet hesabı bu parametreler girilince otomatik oluşur.</div>'+
-          '<button class="btn" id="kapanis_duzenle" style="margin-top:14px;">Maaş Parametrelerini Gir</button>')+
+          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Duzenle</button>'
+        : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) icin bu birimin KENDI maas parametreleri (Agromel/Granul) henuz girilmedi. Eger TUM personel Capak Uretim Birimi ile "Ortak" ise, bu alanlara hic gerek yok. Uretim kayitlari normal girilebilir.</div>'+
+          '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Agromel/Granul Maasi Gir (opsiyonel)</button>')+
       '<div id="kapanis_form" style="display:none; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">'+
-        '<div class="note" style="margin-bottom:10px;">Maaşlar her ay değişebildiği için bu alanlar her yeni ayda BOŞ/SIFIR başlar — her ay için yeniden girmeniz gerekir (bir önceki aydan otomatik kopyalanmaz).</div>'+
+        '<div class="note" style="margin-bottom:10px;">Maaslar her ay degisebildigi icin bu alanlar her yeni ayda BOS/SIFIR baslar -- her ay icin yeniden girmeniz gerekir (bir onceki aydan otomatik kopyalanmaz).</div>'+
         '<div class="row">'+
-          '<div class="field"><label>Agromel Gündüz Maaşı (TL)</label><input type="number" step="100" id="kap_agro_gunduz" value="'+(kapanis?kapanis.agromelGunduzMaas:0)+'"></div>'+
-          '<div class="field"><label>Agromel Gece Maaşı (TL)</label><input type="number" step="100" id="kap_agro_gece" value="'+(kapanis?kapanis.agromelGeceMaas:0)+'"></div>'+
+          '<div class="field"><label>Agromel Gunduz Maasi (TL)</label><input type="number" step="100" id="kap_agro_gunduz" value="'+(kapanis?kapanis.agromelGunduzMaas:0)+'"></div>'+
+          '<div class="field"><label>Agromel Gece Maasi (TL)</label><input type="number" step="100" id="kap_agro_gece" value="'+(kapanis?kapanis.agromelGeceMaas:0)+'"></div>'+
         '</div>'+
         '<div class="row">'+
-          '<div class="field"><label>Granül Gündüz Maaşı (TL)</label><input type="number" step="100" id="kap_gran_gunduz" value="'+(kapanis?kapanis.granulGunduzMaas:0)+'"></div>'+
-          '<div class="field"><label>Granül Gece Maaşı (TL)</label><input type="number" step="100" id="kap_gran_gece" value="'+(kapanis?kapanis.granulGeceMaas:0)+'"></div>'+
+          '<div class="field"><label>Granul Gunduz Maasi (TL)</label><input type="number" step="100" id="kap_gran_gunduz" value="'+(kapanis?kapanis.granulGunduzMaas:0)+'"></div>'+
+          '<div class="field"><label>Granul Gece Maasi (TL)</label><input type="number" step="100" id="kap_gran_gece" value="'+(kapanis?kapanis.granulGeceMaas:0)+'"></div>'+
         '</div>'+
-        '<div class="note" style="margin:-4px 0 13px;">Agromel/Granül maaşları (yukarıdaki 4 alan), Granül Birimi\'nin KENDİ İÇİNDEKİ agromel yapılan/yapılmayan üretim ayrımı içindir — bunları elle girin. Çapak Üretim Birimi ile PAYLAŞILAN personel için aşağıdaki "Ortak İşçilik" alanını kullanın.</div>'+
-        '<div class="field"><label>Ortak İşçilik — Çapak Üretim Birimi ile PAYLAŞILAN personelin bu AYKİ toplam maaş gideri (TL)</label><input type="number" step="100" id="kap_ortak_iscilik" value="'+(kapanis?(kapanis.ortakIscilikAylikMaas||0):0)+'"></div>'+
-        '<button type="button" class="btn ghost small" id="kap_ortak_senkron" style="margin:-4px 0 10px;">↻ Genel Fabrika &gt; Personel\'deki "Ortak" listesinin güncel toplamıyla doldur</button>'+
-        '<div class="note" style="margin:-6px 0 13px;">Bu alan, Genel Fabrika &gt; Personel ekranında "Çapak Üretim Birimi ve Granül Birimi (Ortak)" olarak işaretlenmiş kişilerin toplam aylık maaşıdır — yukarıdaki butonla otomatik doldurabilir ya da elle girebilirsiniz. Ay sonunda bu tutar, o ayki Granül ve Çapak Üretim kg üretim ORANINA göre otomatik olarak iki birim arasında bölüştürülür (bkz. Bilanço). Ortak personel yoksa 0 bırakın.</div>'+
-        '<div class="note" style="margin-bottom:10px;">Maaş değerleri, "Bu Ayı Kaydet"e bastığınız andaki tutarda SABİT kalır (geçmiş ayların maliyeti sonradan değişmesin diye).</div>'+
-        '<button class="btn" id="kapanis_kaydet">Bu Ayı Kaydet</button> '+
-        '<button class="btn ghost" id="kapanis_vazgec">Vazgeç</button>'+
+        '<div class="note" style="margin:-4px 0 13px;">Bu 4 alan SADECE Granul Birimi\'nin KENDI ICINDEKI agromel yapilan/yapilmayan uretim ayrimi icindir. Capak Uretim Birimi ile PAYLASILAN ("Ortak") personel BURAYA girilmez -- onlar Genel Fabrika &gt; Personel\'den otomatik hesaplanir (asagida gosterilir).</div>'+
+        '<div class="note" style="margin-bottom:10px;">Maas degerleri, "Bu Ayi Kaydet"e bastiginiz andaki tutarda SABIT kalir (gecmis aylarin maliyeti sonradan degismesin diye).</div>'+
+        '<button class="btn" id="kapanis_kaydet">Bu Ayi Kaydet</button> '+
+        '<button class="btn ghost" id="kapanis_vazgec">Vazgec</button>'+
       '</div>'+
     '</div>'+
+    '<div class="card" style="margin-top:14px;"><h3 style="margin-bottom:6px;">Ortak Iscilik (Capak Uretim Birimi ile Paylasilan)</h3>'+
+      '<div id="ay_ortak_iscilik_gosterim"><div class="note">Hesaplaniyor...</div></div>'+
+    '</div>'+
     '<div class="grid grid-3" style="margin-top:20px;">'+
-      '<div class="card"><h3>Toplam Üretim</h3><div class="stat">'+fmtKg(totalKg)+'<small>kg</small></div></div>'+
-      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+(kapaliMi?fmt(totalCost):'—')+'<small>'+(kapaliMi?'TL':'girilmedi')+'</small></div></div>'+
-      '<div class="card"><h3>Ort. Birim Maliyet</h3><div class="stat">'+(kapaliMi?fmt(unit):'—')+'<small>'+(kapaliMi?'TL/kg':'girilmedi')+'</small></div></div>'+
+      '<div class="card"><h3>Toplam Uretim</h3><div class="stat">'+fmtKg(totalKg)+'<small>kg</small></div></div>'+
+      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat" id="ay_toplam_maliyet_stat">'+(kapaliMi?fmt(totalCostTemel):'--')+'<small>'+(kapaliMi?'TL':'girilmedi')+'</small></div></div>'+
+      '<div class="card"><h3>Ort. Birim Maliyet</h3><div class="stat" id="ay_ort_birim_stat">'+(kapaliMi && totalKg?fmt(totalCostTemel/totalKg):'--')+'<small>'+(kapaliMi?'TL/kg':'girilmedi')+'</small></div></div>'+
     '</div>'+
     '<div class="grid grid-3" style="margin-top:16px;">'+
       '<div class="card"><h3>Ortalama Saatlik Verim</h3><div class="stat" style="color:var(--amber);">'+fmt(avgVerim)+'<small>kg/saat</small></div></div>'+
     '</div>'+
-    '<div class="section-title">Üretim Yapılan Gün: '+daysWithProd+' / '+daysInMonth+'</div>'+
-    (daysWithProd<daysInMonth ? '<div class="callout">Bu ay <b class="mono">'+(daysInMonth-daysWithProd)+'</b> gün hiç üretim kaydı girilmemiş.</div>' : '<div class="callout">Ayın her günü için üretim kaydı girilmiş.</div>')+
+    '<div class="section-title">Uretim Yapilan Gun: '+daysWithProd+' / '+daysInMonth+'</div>'+
+    (daysWithProd<daysInMonth ? '<div class="callout">Bu ay <b class="mono">'+(daysInMonth-daysWithProd)+'</b> gun hic uretim kaydi girilmemis.</div>' : '<div class="callout">Ayin her gunu icin uretim kaydi girilmis.</div>')+
     '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
-      '<span>Ürün Bazlı Özet</span><button class="btn ghost small" id="aylik_pdf_btn">PDF Olarak Dışa Aktar</button>'+
+      '<span>Urun Bazli Ozet</span><button class="btn ghost small" id="aylik_pdf_btn">PDF Olarak Disa Aktar</button>'+
     '</div>'+
-    '<div class="card"><table><thead><tr><th>Ürün</th><th>Toplam Kg</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Üretim Günü</th></tr></thead><tbody>'+
+    '<div class="card" id="ay_urun_tablo_wrap"><table><thead><tr><th>Urun</th><th>Toplam Kg</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Uretim Gunu</th></tr></thead><tbody>'+
       Object.keys(perProduct).map(function(ad){
         var v = perProduct[ad];
         return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
-          '<td>'+fmtKg(v.kg)+'</td><td>'+(kapaliMi?fmt(v.cost):'—')+'</td>'+
-          '<td>'+(kapaliMi && v.kg?fmt(v.cost/v.kg):'—')+'</td>'+
-          '<td>'+(v.kg?v.days.size:'<span style="color:var(--danger)">üretilmedi</span>')+'</td></tr>';
+          '<td>'+fmtKg(v.kg)+'</td><td>'+(kapaliMi?fmt(v.cost):'--')+'</td>'+
+          '<td>'+(kapaliMi && v.kg?fmt(v.cost/v.kg):'--')+'</td>'+
+          '<td>'+(v.kg?v.days.size:'<span style="color:var(--danger)">uretilmedi</span>')+'</td></tr>';
       }).join('')+
     '</tbody></table></div>'+
-    (notProduced.length>0 ? '<div class="callout warn" style="margin-top:12px;"><b style="display:block;margin-bottom:4px;">Bu ay üretilmeyen ürünler:</b>'+notProduced.map(escapeHtml).join(', ')+'</div>' : '')+
-    '<div class="section-title">Saatlik Verim Trendi (Gündüz / Gece)</div>'+
+    (notProduced.length>0 ? '<div class="callout warn" style="margin-top:12px;"><b style="display:block;margin-bottom:4px;">Bu ay uretilmeyen urunler:</b>'+notProduced.map(escapeHtml).join(', ')+'</div>' : '')+
+    '<div class="section-title">Saatlik Verim Trendi (Gunduz / Gece)</div>'+
     '<div class="card"><div class="chart-wrap"><canvas id="ay_verim"></canvas></div></div>'+
     '<div class="grid grid-2" style="margin-top:22px;">'+
-      '<div class="card"><h3>Günlük Üretim (kg)</h3><div class="chart-wrap"><canvas id="ay_bar"></canvas></div></div>'+
-      '<div class="card"><h3>Elektrik / İşçilik Maliyet Dağılımı</h3><div class="chart-wrap">'+(kapaliMi?'<canvas id="ay_cost"></canvas>':'<div class="empty">Maliyet girilmeden bu grafik gösterilemez</div>')+'</div></div>'+
+      '<div class="card"><h3>Gunluk Uretim (kg)</h3><div class="chart-wrap"><canvas id="ay_bar"></canvas></div></div>'+
+      '<div class="card"><h3>Elektrik / Iscilik Maliyet Dagilimi</h3><div class="chart-wrap">'+(kapaliMi?'<canvas id="ay_cost"></canvas>':'<div class="empty">Maliyet girilmeden bu grafik gosterilemez</div>')+'</div></div>'+
     '</div>'+
-    '<div class="section-title">Bu Aya Ait Kayıtlar</div>'+
-    '<div class="card">'+(list.length===0?'<div class="empty"><b>Bu ay için kayıt yok</b></div>':renderEntryTable(list,false,false))+'</div>';
+    '<div class="section-title">Bu Aya Ait Kayitlar</div>'+
+    '<div class="card" id="ay_kayitlar_tablo_wrap">'+(list.length===0?'<div class="empty"><b>Bu ay icin kayit yok</b></div>':renderEntryTable(list,false,false))+'</div>';
+
+  // Ortak Iscilik Payi: Capak Uretim Birimi'nin o ayki kg uretimine VE merkezi Personel
+  // listesindeki "Ortak" toplamina ihtiyac var -- asenkron hesaplanip, hazir olunca kartlar,
+  // Urun Bazli Ozet tablosu ve Kayitlar tablosu TEKRAR (Ortak Iscilik dahil edilerek) cizilir.
+  // Tamamen OTOMATIKTIR -- manuel bir adim gerekmez.
+  var buNesilAR = RENDER_NESLI;
+  Promise.all([window.api.getBirimData('capak-uretim-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
+    if(buNesilAR !== RENDER_NESLI) return;
+    var capakVeri = sonuc[0], personelListesi = sonuc[1];
+    var ortak = kapaliMi ? ortakIscilikPayiHesapla(month, STATE.birimVeri, capakVeri, personelListesi) : {granulPay:0};
+    var ortakPay = ortak.granulPay;
+    var ortakOran = totalKg ? ortakPay/totalKg : 0;
+
+    var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
+    if(gosterimBox){
+      gosterimBox.innerHTML = ortakPay>0
+        ? '<div class="note">Bu ay Genel Fabrika &gt; Personel\'de "Ortak" isaretli personelin toplam maasi: <b class="mono" style="color:var(--text);">'+fmt(ortak.ortakMaas)+' TL</b>. Granul '+fmt(ortak.granulKg)+' kg / Capak '+fmt(ortak.capakKg)+' kg uretmis -- bu birime dusen pay: <b class="mono" style="color:var(--text);">'+fmt(ortakPay)+' TL</b> (asagidaki toplamlara otomatik eklendi).</div>'
+        : '<div class="note">Genel Fabrika &gt; Personel\'de "Capak Uretim Birimi ve Granul Birimi (Ortak)" isaretli personel yok (ya da bu ay hic uretim yapilmamis) -- ek bir pay hesaplanmadi.</div>';
+    }
+
+    if(!kapaliMi) return;
+
+    var totalCost = totalCostTemel + ortakPay;
+    var unit = totalKg ? totalCost/totalKg : 0;
+    var totalStat = document.getElementById('ay_toplam_maliyet_stat');
+    if(totalStat) totalStat.innerHTML = fmt(totalCost)+'<small>TL'+(ortakPay>0?' -- Ortak dahil':'')+'</small>';
+    var unitStat = document.getElementById('ay_ort_birim_stat');
+    if(unitStat) unitStat.innerHTML = fmt(unit)+'<small>TL/kg</small>';
+
+    var tabloWrap = document.getElementById('ay_urun_tablo_wrap');
+    if(tabloWrap){
+      tabloWrap.innerHTML = '<table><thead><tr><th>Urun</th><th>Toplam Kg</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Uretim Gunu</th></tr></thead><tbody>'+
+        Object.keys(perProduct).map(function(ad){
+          var v = perProduct[ad];
+          var vCost = v.cost + (v.kg * ortakOran);
+          return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
+            '<td>'+fmtKg(v.kg)+'</td><td>'+fmt(vCost)+'</td>'+
+            '<td>'+(v.kg?fmt(vCost/v.kg):'--')+'</td>'+
+            '<td>'+(v.kg?v.days.size:'<span style="color:var(--danger)">uretilmedi</span>')+'</td></tr>';
+        }).join('')+
+      '</tbody></table>';
+    }
+
+    var kayitlarWrap = document.getElementById('ay_kayitlar_tablo_wrap');
+    if(kayitlarWrap && list.length>0){
+      var oranHaritasi = {}; oranHaritasi[month] = ortakOran;
+      kayitlarWrap.innerHTML = renderEntryTable(list, false, false, oranHaritasi);
+    }
+  }).catch(function(err){
+    var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
+    if(gosterimBox) gosterimBox.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
+  });
 
   (document.getElementById('aylik_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
     pdfDisaAktarPenceresiAc({
@@ -4646,24 +4844,12 @@ function renderAylikContent(month){
   var vazgecBtn = document.getElementById('kapanis_vazgec');
   if(vazgecBtn) vazgecBtn.addEventListener('click', function(){ document.getElementById('kapanis_form').style.display = 'none'; });
   (document.getElementById('ay_go_gf_param')||{addEventListener:function(){}}).addEventListener('click', genelFabrikaParametrelerineGit);
-  (document.getElementById('kap_ortak_senkron')||{addEventListener:function(){}}).addEventListener('click', function(){
-    var btn = this;
-    btn.disabled = true; btn.textContent = 'Yükleniyor…';
-    window.api.getPersonelListesi().then(function(personelListesi){
-      var toplam = (personelListesi||[]).filter(function(p){ return p.birimHedefi === 'capak-granul-ortak'; })
-        .reduce(function(s,p){ return s+(Number(p.maas)||0); }, 0);
-      document.getElementById('kap_ortak_iscilik').value = toplam;
-      showToast('Ortak personel toplamıyla dolduruldu ('+fmt(toplam)+' TL) — kalıcı olması için "Bu Ayı Kaydet"e basmayı unutmayın.');
-      btn.disabled = false; btn.textContent = '↻ Genel Fabrika > Personel\'deki "Ortak" listesinin güncel toplamıyla doldur';
-    }).catch(function(err){ alert(err.message); btn.disabled = false; btn.textContent = '↻ Genel Fabrika > Personel\'deki "Ortak" listesinin güncel toplamıyla doldur'; });
-  });
   (document.getElementById('kapanis_kaydet')||{addEventListener:function(){}}).addEventListener('click', function(){
     var obj = {
       agromelGunduzMaas: Number((document.getElementById('kap_agro_gunduz')||{value:''}).value),
       agromelGeceMaas: Number((document.getElementById('kap_agro_gece')||{value:''}).value),
       granulGunduzMaas: Number((document.getElementById('kap_gran_gunduz')||{value:''}).value),
-      granulGeceMaas: Number((document.getElementById('kap_gran_gece')||{value:''}).value),
-      ortakIscilikAylikMaas: Number((document.getElementById('kap_ortak_iscilik')||{value:0}).value)
+      granulGeceMaas: Number((document.getElementById('kap_gran_gece')||{value:''}).value)
     };
     window.api.saveAylikKapanis(STATE.aktifBirimId, month, obj).then(function(kapanislar){
       STATE.birimVeri.aylikKapanislar = kapanislar;
@@ -4864,9 +5050,14 @@ function hammaddeOrtalamaFiyat(veri, hammaddeCinsi){
 // ortakIscilikAylikMaas) iki birim arasında o ayki ÜRETİM KG'sine ORANTILI olarak bölüştürülür —
 // çok üreten birim, ortak maliyetten daha büyük bir pay alır. Bu, aynı maaşın HER İKİ birimin
 // maliyetine de TAM olarak (çift sayılarak) yansımasını önler.
-function ortakIscilikPayiHesapla(ay, granulBirimVerisi, capakBirimVerisi){
-  var kapanis = bulAylikKapanis(ay, granulBirimVerisi);
-  var ortakMaas = kapanis ? (Number(kapanis.ortakIscilikAylikMaas)||0) : 0;
+// Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa (paylaşılan personel), o
+// ayki toplam ortak işçilik maliyeti — Genel Fabrika > Personel'de "Çapak Üretim Birimi ve
+// Granül Birimi (Ortak)" olarak işaretlenmiş kişilerin CANLI (o an güncel) maaş toplamı — iki
+// birim arasında o ayki ÜRETİM KG'sine ORANTILI olarak bölüştürülür. TAMAMEN OTOMATİKTİR: manuel
+// bir senkron/kaydetme adımı GEREKMEZ — personel listesi her değiştiğinde, bu hesaba HEMEN yansır.
+function ortakIscilikPayiHesapla(ay, granulBirimVerisi, capakBirimVerisi, personelListesi){
+  var ortakMaas = (personelListesi||[]).filter(function(p){ return p.birimHedefi === 'capak-granul-ortak'; })
+    .reduce(function(s,p){ return s+(Number(p.maas)||0); }, 0);
   if(!ortakMaas) return {granulPay:0, capakPay:0, ortakMaas:0, granulKg:0, capakKg:0};
 
   var granulKg = (granulBirimVerisi.entries||[]).filter(function(e){ return (e.tarih||'').slice(0,7)===ay; })
@@ -5181,18 +5372,56 @@ function computeCapakMaliyet(kayit, birimVeriOverride, vardiyaGrupToplamKgOverri
   var sure = kaynak.settings.vardiyaSuresi;
   var ay = (kayit.tarih||'').slice(0,7);
   var aylikFiyat = bulAylikFiyat(ay, kaynak);
-  var kapanis = bulAylikKapanis(ay, kaynak);
-  if(!aylikFiyat || !kapanis){
+  // SADECE elektrik/su fiyatı (merkezi Aylık Fiyat) zorunludur. Bu birimin KENDİ maaş kaydı
+  // (Aylık Kapanış) o ay için hiç girilmemiş olsa bile (örn. tüm personel Granül ile "Ortak"
+  // kategorisindeyse, bu birimin kendi maaş alanına hiç gerek kalmaz), maaş kısmı güvenle 0
+  // kabul edilir — elektrik/su maliyeti (ve varsa Ortak İşçilik Payı, ayrıca eklenir) yine de
+  // doğru hesaplanabilsin diye.
+  if(!aylikFiyat){
     return {sure:sure, maliyetGirildi:false, elektrikMaliyeti:0, suMaliyeti:0, iscilikMaliyeti:0,
       toplamElektrik:0, toplamMaliyet:0, birimMaliyet:0};
   }
+  var kapanis = bulAylikKapanis(ay, kaynak) || {};
   var elektrikMaliyetiVardiya = sure * (aylikFiyat.elektrikFiyati||0) * (kaynak.settings.suluKirmaElektrik||0);
   var suMaliyetiVardiya = sure * (aylikFiyat.suFiyati||0) * (kaynak.settings.suluKirmaSu||0);
-  var maas = kayit.vardiya === 'gece' ? (kapanis.suluKirmaGeceMaas||0) : (kapanis.suluKirmaGunduzMaas||0);
+  var maas = kayit.vardiya === 'gece' ? (Number(kapanis.suluKirmaGeceMaas)||0) : (Number(kapanis.suluKirmaGunduzMaas)||0);
   var iscilikMaliyetiVardiya = aylikFiyat.aylikCalismaSuresi ? (maas / aylikFiyat.aylikCalismaSuresi) * sure : 0;
   var toplamMaliyetVardiya = elektrikMaliyetiVardiya + suMaliyetiVardiya + iscilikMaliyetiVardiya;
   var grupKg = vardiyaGrupToplamKgOverride || Number(kayit.uretilenCapak)||0;
   var pay = grupKg ? (Number(kayit.uretilenCapak)||0) / grupKg : 0;
+  var birimMaliyet = grupKg ? toplamMaliyetVardiya / grupKg : 0;
+  var toplamMaliyet = toplamMaliyetVardiya * pay;
+  return {
+    sure: sure, maliyetGirildi: true,
+    elektrikMaliyeti: elektrikMaliyetiVardiya*pay, suMaliyeti: suMaliyetiVardiya*pay, iscilikMaliyeti: iscilikMaliyetiVardiya*pay,
+    toplamMaliyet: toplamMaliyet, birimMaliyet: birimMaliyet, toplamMaliyetVardiya: toplamMaliyetVardiya
+  };
+}
+
+// "Diğer birim"ler (Şişirme, Enjeksiyon vb. — Granül/Çapak Üretim DIŞINDAKİ, adet bazlı üretim
+// yapan HER birim, gelecekte eklenecekler DAHİL) için elektrik+su+işçilik maliyeti. computeCosts/
+// computeCapakMaliyet ile AYNI desen: elektrik/su FİYATI merkezi Aylık Fiyatlar'dan (Genel
+// Fabrika), elektrik/su TÜKETİMİ (settings.elektrikTuketimi/suTuketimi) ve işçilik (Aylık
+// Kapanış'taki digerBirimIscilikMaas — Genel Fabrika'daki merkezi personelden senkronlanabilir)
+// yine Genel Fabrika'dan beslenir, ama birime özel saklanır (her birim kendi settings/kapanış
+// kaydına sahip). Sadece merkezi Aylık Fiyat zorunludur; kendi maaş kaydı eksikse 0 kabul edilir.
+function computeBidonMaliyet(entry, birimVeriOverride, vardiyaGrupToplamKgOverride){
+  var kaynak = birimVeriOverride || STATE.birimVeri;
+  var sure = kaynak.settings.vardiyaSuresi;
+  var ay = (entry.tarih||'').slice(0,7);
+  var aylikFiyat = bulAylikFiyat(ay, kaynak);
+  if(!aylikFiyat){
+    return {sure:sure, maliyetGirildi:false, elektrikMaliyeti:0, suMaliyeti:0, iscilikMaliyeti:0,
+      toplamMaliyet:0, birimMaliyet:0};
+  }
+  var kapanis = bulAylikKapanis(ay, kaynak) || {};
+  var elektrikMaliyetiVardiya = sure * (aylikFiyat.elektrikFiyati||0) * (kaynak.settings.elektrikTuketimi||0);
+  var suMaliyetiVardiya = sure * (aylikFiyat.suFiyati||0) * (kaynak.settings.suTuketimi||0);
+  var maas = Number(kapanis.digerBirimIscilikMaas)||0;
+  var iscilikMaliyetiVardiya = aylikFiyat.aylikCalismaSuresi ? (maas / aylikFiyat.aylikCalismaSuresi) * sure : 0;
+  var toplamMaliyetVardiya = elektrikMaliyetiVardiya + suMaliyetiVardiya + iscilikMaliyetiVardiya;
+  var grupKg = vardiyaGrupToplamKgOverride || Number(entry.kg)||0;
+  var pay = grupKg ? (Number(entry.kg)||0) / grupKg : 0;
   var birimMaliyet = grupKg ? toplamMaliyetVardiya / grupKg : 0;
   var toplamMaliyet = toplamMaliyetVardiya * pay;
   return {
@@ -6053,20 +6282,21 @@ function renderCapakBilancoIcerik(){
 
   var fetchler = [];
   // Çapak Üretim Birimi'nin Bilanço'sunda "Ortak İşçilik" payını hesaplayabilmesi için Granül
-  // Birimi'nin verisine (o ay girilen ortakIscilikAylikMaas + o ayki granül kg'si) ihtiyacı var.
+  // Birimi'nin (kg üretimi) VE merkezi Personel listesinin (canlı "Ortak" maaş toplamı) verisine ihtiyacı var.
   if(isGranul || digerGranulVarMi) fetchler.push(window.api.getBirimData('capak-uretim-birimi').then(function(v){ return {tur:'capak', veri:v}; }));
   if(isCapak || digerGranulVarMi) fetchler.push(window.api.getBirimData('granul-birimi').then(function(v){ return {tur:'granul', veri:v}; }));
+  if(isGranul || isCapak) fetchler.push(window.api.getPersonelListesi().then(function(v){ return {tur:'personel', veri:v}; }));
 
   Promise.all(fetchler).then(function(sonuclar){
-    var capakBirimVerisi = null, granulBirimVerisiCapraz = null;
-    sonuclar.forEach(function(s){ if(s.tur==='capak') capakBirimVerisi=s.veri; if(s.tur==='granul') granulBirimVerisiCapraz=s.veri; });
-    renderCapakBilancoIcerikGercek(capakBirimVerisi, granulBirimVerisiCapraz);
+    var capakBirimVerisi = null, granulBirimVerisiCapraz = null, personelListesi = [];
+    sonuclar.forEach(function(s){ if(s.tur==='capak') capakBirimVerisi=s.veri; if(s.tur==='granul') granulBirimVerisiCapraz=s.veri; if(s.tur==='personel') personelListesi=s.veri; });
+    renderCapakBilancoIcerikGercek(capakBirimVerisi, granulBirimVerisiCapraz, personelListesi);
   }).catch(function(err){
     box.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
   });
 }
 
-function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVerisiCapraz){
+function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVerisiCapraz, personelListesi){
   var box = document.getElementById('cb_content'); if(!box) return;
   var month = window.__cbSelMonth || todayStr().slice(0,7);
   var tumZaman = !!window.__cbTumZaman;
@@ -6166,7 +6396,7 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
         return Object.keys(s);
       })() : [month];
       aylar.forEach(function(ay){
-        var pay = ortakIscilikPayiHesapla(ay, kaynakGranul, kaynakCapak);
+        var pay = ortakIscilikPayiHesapla(ay, kaynakGranul, kaynakCapak, personelListesi);
         ortakIscilikToplam += isGranul ? pay.granulPay : pay.capakPay;
       });
     }
