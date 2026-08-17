@@ -6521,7 +6521,7 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
   var birimOlcu = isDiger ? 'adet' : 'kg';
   var cinsEtiket = isCapak ? 'Çapak Cinsi' : (isGranul ? 'Granül Cinsi' : 'Ürün');
   var perCins = {};
-  function bosSatir(){ return {uretilenKg:0, uretimMaliyeti:0, hammaddeMaliyeti:0, satilanKg:0, satisGeliri:0}; }
+  function bosSatir(){ return {uretilenKg:0, uretimMaliyeti:0, hammaddeMaliyeti:0, satilanKg:0, satisGeliri:0, satilanMalinMaliyeti:0}; }
 
   if(isCapak){
     var uretimler = (STATE.birimVeri.capakUretimleri||[]).filter(function(cu){ return tumZaman || cu.tarih.slice(0,7)===month; });
@@ -6546,17 +6546,17 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
   } else if(isGranul){
     var uretimler2 = (STATE.birimVeri.entries||[]).filter(function(e){ return tumZaman || e.tarih.slice(0,7)===month; });
     STATE.merkeziCinsler.urunler.forEach(function(p){ perCins[p.ad] = bosSatir(); });
+    // Üretim: SADECE bilgi amaçlı (Üretilen kg) — artık "Toplam Maliyet" hesabına dahil DEĞİL,
+    // çünkü üretilen ile satılan farklı partiler olabilir (aşağıda satış tarafında, Genel Fabrika
+    // > Stok Maliyetleri'ndeki ağırlıklı ortalama birim maliyet kullanılarak GERÇEK bir "satılan
+    // malın maliyeti" hesaplanıyor). Normal ve Fason (bedelsiz çapakla yapılan işçilik üretimi)
+    // AYRI satırlarda gösterilir — birbirine karıştırılırsa maliyet yanıltıcı olur (bkz. Stok
+    // Maliyetleri'ndeki aynı ayrım).
     uretimler2.forEach(function(e){
-      var u = e.urun;
-      if(!perCins[u]) perCins[u] = bosSatir();
-      perCins[u].uretilenKg += Number(e.kg)||0;
-      var cst = computeCosts(e, STATE.birimVeri, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
-      perCins[u].uretimMaliyeti += cst.maliyetGirildi ? cst.toplamMaliyet : 0;
-      // Hammadde Maliyeti: kullanılan çapağın ağırlıklı ortalama alım fiyatına göre — İşçilik
-      // kaynaklıysa (bedelsiz) 0 kalır, gerçek bir maliyet YOKTUR.
-      if(e.capakCinsi && Number(e.kullanilanCapak) && e.capakKaynagi !== 'iscilik'){
-        perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * capakCinsiKgMaliyeti(e.capakCinsi, capakBirimVerisiCapraz || {});
-      }
+      var fasonMu = e.capakKaynagi === 'iscilik';
+      var anahtar = fasonMu ? e.urun+' (Fason)' : e.urun;
+      if(!perCins[anahtar]) perCins[anahtar] = bosSatir();
+      perCins[anahtar].uretilenKg += Number(e.kg)||0;
     });
   } else if(isDiger){
     var uretimler3 = (STATE.birimVeri.entries||[]).filter(function(e){ return tumZaman || e.tarih.slice(0,7)===month; });
@@ -6578,20 +6578,35 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
     });
   }
 
-  // Müşteri Satışları — TÜM birim türlerinde ortak.
+  // Müşteri Satışları — TÜM birim türlerinde ortak. Granül Birimi'nde ayrıca SATILAN MALIN
+  // MALİYETİ de burada hesaplanır: Genel Fabrika > Stok Maliyetleri'ndeki (artık fason'dan
+  // arındırılmış) ağırlıklı ortalama birim maliyet, satışın kaynağına (normal/fason) göre DOĞRU
+  // fonksiyondan çekilir. Bu, "Toplam Maliyet" kartının artık ÜRETİM değil GERÇEK SATIŞ bazlı
+  // olmasını sağlar (satış fiyatı − birim üretim maliyeti = gerçek kâr marjı).
   (STATE.birimVeri.musteriSatislari||[]).filter(function(ms){ return tumZaman || ms.tarih.slice(0,7)===month; }).forEach(function(ms){
     var u = ms.urun;
-    if(!perCins[u]) perCins[u] = bosSatir();
-    perCins[u].satilanKg += Number(ms.kg)||0;
-    perCins[u].satisGeliri += Number(ms.tutar)||0;
+    var anahtar = u;
+    if(isGranul){
+      var fasonMu = ms.kaynak === 'iscilik';
+      anahtar = fasonMu ? u+' (Fason)' : u;
+      var birimMaliyet = fasonMu
+        ? granulCinsiIscilikStokMaliyeti(u, STATE.birimVeri)
+        : granulCinsiKgMaliyeti(u, STATE.birimVeri, capakBirimVerisiCapraz||{});
+      if(!perCins[anahtar]) perCins[anahtar] = bosSatir();
+      perCins[anahtar].satilanMalinMaliyeti += (Number(ms.kg)||0) * birimMaliyet;
+    }
+    if(!perCins[anahtar]) perCins[anahtar] = bosSatir();
+    perCins[anahtar].satilanKg += Number(ms.kg)||0;
+    perCins[anahtar].satisGeliri += Number(ms.tutar)||0;
   });
 
   var cinsler = Object.keys(perCins).filter(function(k){ var v = perCins[k]; return v.uretilenKg>0 || v.satilanKg>0; });
-  var toplam = {uretilenKg:0, uretimMaliyeti:0, hammaddeMaliyeti:0, satilanKg:0, satisGeliri:0};
+  var toplam = {uretilenKg:0, uretimMaliyeti:0, hammaddeMaliyeti:0, satilanKg:0, satisGeliri:0, satilanMalinMaliyeti:0};
   cinsler.forEach(function(k){
     toplam.uretilenKg += perCins[k].uretilenKg; toplam.uretimMaliyeti += perCins[k].uretimMaliyeti;
     toplam.hammaddeMaliyeti += perCins[k].hammaddeMaliyeti;
     toplam.satilanKg += perCins[k].satilanKg; toplam.satisGeliri += perCins[k].satisGeliri;
+    toplam.satilanMalinMaliyeti += perCins[k].satilanMalinMaliyeti;
   });
 
   // Ortak İşçilik Payı: Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa, o
@@ -6634,15 +6649,23 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
     }
   }
 
-  var toplamMaliyet = toplam.uretimMaliyeti + toplam.hammaddeMaliyeti + ortakIscilikToplam;
+  // "Toplam Maliyet": Granül Birimi'nde artık GERÇEK SATIŞ BAZLI (satılan malın maliyeti, Genel
+  // Fabrika > Stok Maliyetleri'ndeki ağırlıklı ortalama birim maliyete göre) — Çapak/Diğer
+  // birimlerde ise HÂLÂ eski (üretim bazlı) mantık geçerlidir. Ortak İşçilik Payı, Granül'ün YENİ
+  // satış-bazlı formülüne BİLİNÇLİ olarak DAHİL EDİLMEZ — çünkü Stok Maliyetleri'ndeki birim
+  // maliyet zaten Ortak İşçilik'i içermiyor (ayrı bir kavram); dahil edilseydi, "satılan malın
+  // maliyeti" artık o cinsin GERÇEK birim maliyetini yansıtmazdı.
+  var toplamMaliyet = isGranul ? toplam.satilanMalinMaliyeti : (toplam.uretimMaliyeti + toplam.hammaddeMaliyeti + ortakIscilikToplam);
   var toplamKarZarar = toplam.satisGeliri - toplamMaliyet;
   function miktarGoster(v){ return isDiger ? fmt(v)+' adet' : fmtKg(v)+' kg'; }
 
   box.innerHTML =
-    '<div class="callout">Bu tablo, seçilen dönemde <b>üretilen</b>'+(isCapak?' çapağın':'')+' maliyetiyle, aynı dönemde <b>satılan</b> miktarın gelirini '+cinsEtiket.toLowerCase()+' bazında karşılaştırır'+(isCapak?' (Genel Fabrika\'ya iç devir + gerçek müşteri satışları birlikte sayılır)':' (gerçek müşteri satışları)')+'. "Toplam Maliyet" = Üretim Maliyeti (elektrik/su/işçilik payı) + Hammadde Maliyeti (tüketilen hurda/çapak/hammadde/granül girdisinin maliyeti)'+((isGranul||isCapak)?' + Ortak İşçilik Payı (aşağıda)':'')+'. Üretim ve satış farklı partiler olabileceği için bu, birebir eşleşmiş bir "parti kârı" değil, dönemin genel bir karşılaştırmasıdır.'+(isDiger?' Hammadde maliyeti sadece girdi kaynağı SEÇİLMİŞ kayıtlar için hesaplanabilir.':'')+'</div>'+
-    ((isGranul||isCapak) && ortakIscilikToplam>0 ? '<div class="callout" style="margin-top:10px;">Bu tutara, Çapak Üretim Birimi ile PAYLAŞILAN personelin, seçilen dönemdeki kg üretim oranına göre bu birime düşen <b>Ortak İşçilik Payı: '+fmt(ortakIscilikToplam)+' TL</b> dahildir (cins bazlı tabloya değil, sadece genel toplama eklenir — bkz. Aylık Kapanış).</div>' : '')+
+    (isGranul
+      ? '<div class="callout">Bu tablo, seçilen dönemde <b>satılan</b> granülün GERÇEK kârını gösterir: her satış, Genel Fabrika &gt; Stok Maliyetleri\'ndeki ağırlıklı ortalama birim maliyetiyle (normal/fason ayrımına göre DOĞRU kaynaktan) eşleştirilir. "Toplam Maliyet" = Satılan Malın Maliyeti (Satılan kg × Birim Üretim Maliyeti). "Üretilen (kg)" sütunu sadece bilgi amaçlıdır, bu ayki üretimin kendisi maliyete DAHİL EDİLMEZ — çünkü satılan granül, geçmiş bir ayda üretilmiş de olabilir.</div>'
+      : '<div class="callout">Bu tablo, seçilen dönemde <b>üretilen</b>'+(isCapak?' çapağın':'')+' maliyetiyle, aynı dönemde <b>satılan</b> miktarın gelirini '+cinsEtiket.toLowerCase()+' bazında karşılaştırır'+(isCapak?' (Genel Fabrika\'ya iç devir + gerçek müşteri satışları birlikte sayılır)':' (gerçek müşteri satışları)')+'. "Toplam Maliyet" = Üretim Maliyeti (elektrik/su/işçilik payı) + Hammadde Maliyeti (tüketilen hurda/çapak/hammadde/granül girdisinin maliyeti)'+(isCapak?' + Ortak İşçilik Payı (aşağıda)':'')+'. Üretim ve satış farklı partiler olabileceği için bu, birebir eşleşmiş bir "parti kârı" değil, dönemin genel bir karşılaştırmasıdır.'+(isDiger?' Hammadde maliyeti sadece girdi kaynağı SEÇİLMİŞ kayıtlar için hesaplanabilir.':'')+'</div>')+
+    (isCapak && ortakIscilikToplam>0 ? '<div class="callout" style="margin-top:10px;">Bu tutara, Granül Birimi ile PAYLAŞILAN personelin, seçilen dönemdeki kg üretim oranına göre bu birime düşen <b>Ortak İşçilik Payı: '+fmt(ortakIscilikToplam)+' TL</b> dahildir (cins bazlı tabloya değil, sadece genel toplama eklenir — bkz. Aylık Kapanış).</div>' : '')+
     '<div class="grid grid-3" style="margin-top:16px;">'+
-      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+fmt(toplamMaliyet)+'<small>TL (Üretim: '+fmt(toplam.uretimMaliyeti)+' + Hammadde: '+fmt(toplam.hammaddeMaliyeti)+(ortakIscilikToplam>0?(' + Ortak İşçilik: '+fmt(ortakIscilikToplam)):'')+')</small></div></div>'+
+      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+fmt(toplamMaliyet)+'<small>TL'+(isGranul?' (Satılan Malın Maliyeti)':(' (Üretim: '+fmt(toplam.uretimMaliyeti)+' + Hammadde: '+fmt(toplam.hammaddeMaliyeti)+(ortakIscilikToplam>0?(' + Ortak İşçilik: '+fmt(ortakIscilikToplam)):'')+')'))+'</small></div></div>'+
       '<div class="card"><h3>Toplam Satış Geliri</h3><div class="stat">'+fmt(toplam.satisGeliri)+'<small>TL</small></div></div>'+
       '<div class="card"><h3>Fark (Gelir − Maliyet)</h3><div class="stat" style="color:'+(toplamKarZarar<0?'var(--danger)':'#2ea043')+';">'+fmt(toplamKarZarar)+'<small>TL</small></div></div>'+
     '</div>'+
@@ -6651,23 +6674,40 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
       (cinsler.length===0 ? '' : '<button class="btn ghost small" id="cb_pdf_btn">PDF Olarak Dışa Aktar</button>')+
     '</div>'+
     (cinsler.length===0 ? '<div class="empty"><b>Bu dönemde üretim veya satış kaydı yok</b></div>' :
-      '<div class="card"><table><thead><tr><th>'+escapeHtml(cinsEtiket)+'</th><th>Üretilen ('+birimOlcu+')</th><th>Üretim Maliyeti (TL)</th><th>Hammadde Maliyeti (TL)</th><th>Toplam Maliyet (TL)</th><th>Satılan ('+birimOlcu+')</th><th>Satış Geliri (TL)</th><th>Fark (TL)</th></tr></thead><tbody>'+
-        cinsler.map(function(k){
-          var v = perCins[k];
-          var satirToplamMaliyet = v.uretimMaliyeti + v.hammaddeMaliyeti;
-          var fark = v.satisGeliri - satirToplamMaliyet;
-          return '<tr><td class="txt"><span class="tag '+tagClassFor(k)+'">'+escapeHtml(k)+'</span></td>'+
-            '<td>'+miktarGoster(v.uretilenKg)+'</td><td>'+fmt(v.uretimMaliyeti)+'</td>'+
-            '<td>'+fmt(v.hammaddeMaliyeti)+'</td><td><b>'+fmt(satirToplamMaliyet)+'</b></td>'+
-            '<td>'+miktarGoster(v.satilanKg)+'</td><td>'+fmt(v.satisGeliri)+'</td>'+
-            '<td style="color:'+(fark<0?'var(--danger)':'#2ea043')+';"><b>'+fmt(fark)+'</b></td></tr>';
-        }).join('')+
-      '</tbody></table></div>');
+      (isGranul
+        ? '<div class="card"><table><thead><tr><th>'+escapeHtml(cinsEtiket)+'</th><th>Üretilen (kg)</th><th>Satılan (kg)</th><th>Birim Maliyet (TL/kg)</th><th>Satılan Malın Maliyeti (TL)</th><th>Satış Geliri (TL)</th><th>Fark (TL)</th></tr></thead><tbody>'+
+            cinsler.map(function(k){
+              var v = perCins[k];
+              var birimMaliyetGosterim = v.satilanKg ? v.satilanMalinMaliyeti/v.satilanKg : 0;
+              var fark = v.satisGeliri - v.satilanMalinMaliyeti;
+              return '<tr><td class="txt"><span class="tag '+tagClassFor(k)+'">'+escapeHtml(k)+'</span></td>'+
+                '<td>'+fmtKg(v.uretilenKg)+'</td><td>'+fmtKg(v.satilanKg)+'</td>'+
+                '<td>'+(v.satilanKg?fmt(birimMaliyetGosterim):'—')+'</td><td><b>'+fmt(v.satilanMalinMaliyeti)+'</b></td>'+
+                '<td>'+fmt(v.satisGeliri)+'</td>'+
+                '<td style="color:'+(fark<0?'var(--danger)':'#2ea043')+';"><b>'+fmt(fark)+'</b></td></tr>';
+            }).join('')+
+          '</tbody></table></div>'
+        : '<div class="card"><table><thead><tr><th>'+escapeHtml(cinsEtiket)+'</th><th>Üretilen ('+birimOlcu+')</th><th>Üretim Maliyeti (TL)</th><th>Hammadde Maliyeti (TL)</th><th>Toplam Maliyet (TL)</th><th>Satılan ('+birimOlcu+')</th><th>Satış Geliri (TL)</th><th>Fark (TL)</th></tr></thead><tbody>'+
+            cinsler.map(function(k){
+              var v = perCins[k];
+              var satirToplamMaliyet = v.uretimMaliyeti + v.hammaddeMaliyeti;
+              var fark = v.satisGeliri - satirToplamMaliyet;
+              return '<tr><td class="txt"><span class="tag '+tagClassFor(k)+'">'+escapeHtml(k)+'</span></td>'+
+                '<td>'+miktarGoster(v.uretilenKg)+'</td><td>'+fmt(v.uretimMaliyeti)+'</td>'+
+                '<td>'+fmt(v.hammaddeMaliyeti)+'</td><td><b>'+fmt(satirToplamMaliyet)+'</b></td>'+
+                '<td>'+miktarGoster(v.satilanKg)+'</td><td>'+fmt(v.satisGeliri)+'</td>'+
+                '<td style="color:'+(fark<0?'var(--danger)':'#2ea043')+';"><b>'+fmt(fark)+'</b></td></tr>';
+            }).join('')+
+          '</tbody></table></div>'));
 
   (document.getElementById('cb_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
     pdfDisaAktarPenceresiAc({
       baslik: aktifBirimAdi()+' — Bilanço ('+(tumZaman?'Tüm Zamanlar':ayGoster(month))+')',
-      sutunlar: [
+      sutunlar: isGranul ? [
+        {key:'cins', label:cinsEtiket}, {key:'uretilenKg', label:'Üretilen (kg)'}, {key:'satilanKg', label:'Satılan (kg)'},
+        {key:'birimMaliyet', label:'Birim Maliyet (TL/kg)'}, {key:'toplamMaliyet', label:'Satılan Malın Maliyeti (TL)'},
+        {key:'satisGeliri', label:'Satış Geliri (TL)'}, {key:'fark', label:'Fark (TL)'}
+      ] : [
         {key:'cins', label:cinsEtiket}, {key:'uretilenKg', label:'Üretilen ('+birimOlcu+')'}, {key:'uretimMaliyeti', label:'Üretim Maliyeti (TL)'},
         {key:'hammaddeMaliyeti', label:'Hammadde Maliyeti (TL)'}, {key:'toplamMaliyet', label:'Toplam Maliyet (TL)'},
         {key:'satilanKg', label:'Satılan ('+birimOlcu+')'}, {key:'satisGeliri', label:'Satış Geliri (TL)'}, {key:'fark', label:'Fark (TL)'}
@@ -6675,16 +6715,23 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
       kayitlarGetir: function(){
         return cinsler.map(function(k){
           var v = perCins[k];
+          if(isGranul){
+            var birimMaliyet = v.satilanKg ? v.satilanMalinMaliyeti/v.satilanKg : 0;
+            return { cins:k, uretilenKg:v.uretilenKg, satilanKg:v.satilanKg, birimMaliyet:birimMaliyet, toplamMaliyet:v.satilanMalinMaliyeti, satisGeliri:v.satisGeliri, fark:v.satisGeliri-v.satilanMalinMaliyeti };
+          }
           var stm = v.uretimMaliyeti + v.hammaddeMaliyeti;
           return { cins:k, uretilenKg:v.uretilenKg, uretimMaliyeti:v.uretimMaliyeti, hammaddeMaliyeti:v.hammaddeMaliyeti, toplamMaliyet:stm, satilanKg:v.satilanKg, satisGeliri:v.satisGeliri, fark:v.satisGeliri-stm };
         });
       },
       satirDegeri: function(r, key){
         if(key==='uretilenKg'||key==='satilanKg') return miktarGoster(r[key]);
-        if(key==='uretimMaliyeti'||key==='hammaddeMaliyeti'||key==='toplamMaliyet'||key==='satisGeliri'||key==='fark') return fmt(r[key])+' TL';
+        if(key==='uretimMaliyeti'||key==='hammaddeMaliyeti'||key==='toplamMaliyet'||key==='satisGeliri'||key==='fark'||key==='birimMaliyet') return fmt(r[key])+' TL';
         return r[key] || '';
       },
       ozetSatirlari: function(){
+        if(isGranul){
+          return [{etiket:'Toplam Satılan Malın Maliyeti', deger:fmt(toplamMaliyet)+' TL'}, {etiket:'Toplam Satış Geliri', deger:fmt(toplam.satisGeliri)+' TL'}, {etiket:'Fark', deger:fmt(toplamKarZarar)+' TL'}];
+        }
         return [{etiket:'Toplam Üretim Maliyeti', deger:fmt(toplam.uretimMaliyeti)+' TL'}, {etiket:'Toplam Hammadde Maliyeti', deger:fmt(toplam.hammaddeMaliyeti)+' TL'}]
           .concat(ortakIscilikToplam>0 ? [{etiket:'Ortak İşçilik Payı', deger:fmt(ortakIscilikToplam)+' TL'}] : [])
           .concat([{etiket:'Toplam Maliyet', deger:fmt(toplamMaliyet)+' TL'}, {etiket:'Toplam Satış Geliri', deger:fmt(toplam.satisGeliri)+' TL'}, {etiket:'Fark', deger:fmt(toplamKarZarar)+' TL'}]);
