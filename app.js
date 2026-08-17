@@ -4829,19 +4829,16 @@ function renderAylikContent(month){
           '</div>'
         : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) icin Genel Fabrika\'da henuz elektrik fiyati girilmedi. <a id="ay_go_gf_param" style="color:var(--amber); cursor:pointer;">Genel Fabrika &gt; Parametreler\'e git</a></div>')+
     '</div>'+
-    '<div class="card" id="kapanis_card" style="margin-top:14px;"><h3 style="margin-bottom:6px;">Agromel / Granül Maaşları (Genel Fabrika &gt; Personel\'den otomatik)</h3>'+
-      '<div id="ay_kapanis_gosterim"><div class="note">Hesaplanıyor…</div></div>'+
-    '</div>'+
     '<div class="card" style="margin-top:14px;"><h3 style="margin-bottom:6px;">Ortak Iscilik (Capak Uretim Birimi ile Paylasilan)</h3>'+
       '<div id="ay_ortak_iscilik_gosterim"><div class="note">Hesaplaniyor...</div></div>'+
     '</div>'+
     '<div class="grid grid-3" style="margin-top:20px;">'+
       '<div class="card"><h3>Toplam Uretim</h3><div class="stat">'+fmtKg(totalKg)+'<small>kg</small></div></div>'+
-      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat" id="ay_toplam_maliyet_stat">'+(kapaliMi?fmt(totalCostTemel):'--')+'<small>'+(kapaliMi?'TL':'girilmedi')+'</small></div></div>'+
-      '<div class="card"><h3>Ort. Birim Maliyet</h3><div class="stat" id="ay_ort_birim_stat">'+(kapaliMi && totalKg?fmt(totalCostTemel/totalKg):'--')+'<small>'+(kapaliMi?'TL/kg':'girilmedi')+'</small></div></div>'+
+      '<div class="card"><h3>Tüketilen Elektrik</h3><div class="stat" id="ay_tuketilen_elektrik_stat">'+(kapaliMi?'Hesaplanıyor…':'--')+'</div></div>'+
+      '<div class="card"><h3>Anlık Personel Maaşı</h3><div class="stat" id="ay_anlik_maas_stat">'+(kapaliMi?'Hesaplanıyor…':'--')+'</div></div>'+
     '</div>'+
     '<div class="grid grid-3" style="margin-top:16px;">'+
-      '<div class="card"><h3>Ortalama Saatlik Verim</h3><div class="stat" style="color:var(--amber);">'+fmt(avgVerim)+'<small>kg/saat</small></div></div>'+
+      '<div class="card"><h3>Aylık Ortalama Saatlik Verimi</h3><div class="stat" style="color:var(--amber);">'+fmt(avgVerim)+'<small>kg/saat</small></div></div>'+
     '</div>'+
     '<div class="section-title">Uretim Yapilan Gun: '+daysWithProd+' / '+daysInMonth+'</div>'+
     (daysWithProd<daysInMonth ? '<div class="callout">Bu ay <b class="mono">'+(daysInMonth-daysWithProd)+'</b> gun hic uretim kaydi girilmemis.</div>' : '<div class="callout">Ayin her gunu icin uretim kaydi girilmis.</div>')+
@@ -4889,16 +4886,6 @@ function renderAylikContent(month){
     var farkliMi = kGunduzEski!==canliAgroGunduz || kGeceEski!==canliAgroGece || gGunduzEski!==canliGranGunduz || gGeceEski!==canliGranGece;
 
     function devamEt(){
-      var kapanisGosterimBox = document.getElementById('ay_kapanis_gosterim');
-      if(kapanisGosterimBox){
-        kapanisGosterimBox.innerHTML =
-          '<div class="row" style="flex-wrap:wrap; gap:18px;">'+
-            '<div><div class="note">Agromel Gunduz/Gece</div><b class="mono">'+fmt(canliAgroGunduz)+' / '+fmt(canliAgroGece)+' TL</b></div>'+
-            '<div><div class="note">Granul Gunduz/Gece</div><b class="mono">'+fmt(canliGranGunduz)+' / '+fmt(canliGranGece)+' TL</b></div>'+
-          '</div>'+
-          '<div class="note" style="margin-top:8px;">Bu degerler Genel Fabrika &gt; Personel\'de "Granul Birimi -- Agromel" / "Granul Birimi -- Granul" kategorilerine atanmis kisilerin toplam maasidir -- otomatik hesaplanir, elle girmenize gerek yoktur.</div>';
-      }
-
       var costsGuncel = list.map(function(e){ return computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
       var totalCostTemelGuncel = costsGuncel.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
       var perProductGuncel = {};
@@ -4927,12 +4914,26 @@ function renderAylikContent(month){
 
       if(!kapaliMi) return;
 
-      var totalCost = totalCostTemelGuncel + ortakPay;
-      var unit = totalKg ? totalCost/totalKg : 0;
-      var totalStat = document.getElementById('ay_toplam_maliyet_stat');
-      if(totalStat) totalStat.innerHTML = fmt(totalCost)+'<small>TL'+(ortakPay>0?' -- Ortak dahil':'')+'</small>';
-      var unitStat = document.getElementById('ay_ort_birim_stat');
-      if(unitStat) unitStat.innerHTML = fmt(unit)+'<small>TL/kg</small>';
+      // Tüketilen Elektrik: bu ay ŞU ANA KADAR kayıtlı TÜM üretimlerin toplam süresine (saat) göre
+      // -- Granül Birimi'ne atanmış makinelerin toplam KWH kapasitesiyle çarpılır -- gerçek
+      // tüketilen kWh + bunun TL karşılığı. "Anlık" olması, `list`'in zaten sadece BUGÜNE KADAR
+      // girilmiş kayıtları içermesinden gelir (gelecek günler için doğal olarak kayıt yoktur).
+      var toplamSureBuAy = costsGuncel.reduce(function(s,c){ return s+c.gosterilenSure; },0);
+      var makineToplamiElek = (STATE.birimVeri.makineler||[]).filter(function(mk){ return mk.birimHedefi === 'granul-birimi'; })
+        .reduce(function(s,mk){ return s+(Number(mk.elektrikTuketimi)||0); },0);
+      var toplamKwh = toplamSureBuAy * makineToplamiElek;
+      var toplamElektrikTL = costsGuncel.reduce(function(s,c){ return s+c.toplamElektrik; },0);
+      var elekStat = document.getElementById('ay_tuketilen_elektrik_stat');
+      if(elekStat) elekStat.innerHTML = fmt(toplamKwh)+'<small>KWH — '+fmt(toplamElektrikTL)+' TL</small>';
+
+      // Anlık Personel Maaşı: bu ay ŞU ANA KADAR kayıtlı üretimlerin İŞÇİLİK maliyeti toplamı --
+      // Agromel/Granül'ün kendi maaşı (Genel Fabrika > Personel'den canlı) + Ortak İşçilik'in
+      // (Çapak ile paylaşılan) bu ana kadarki payı (SAAT bazlı, madde 17'deki düzeltmeyle tutarlı).
+      var toplamIscilikTemel = costsGuncel.reduce(function(s,c){ return s+c.toplamIscilik; },0);
+      var ortakPaySoFar = ortakSaatlikOran * toplamSureBuAy;
+      var anlikMaas = toplamIscilikTemel + ortakPaySoFar;
+      var maasStat = document.getElementById('ay_anlik_maas_stat');
+      if(maasStat) maasStat.innerHTML = fmt(anlikMaas)+'<small>TL'+(ortakPaySoFar>0?' — Ortak dahil':'')+'</small>';
 
       var tabloWrap = document.getElementById('ay_urun_tablo_wrap');
       if(tabloWrap){
@@ -4964,18 +4965,19 @@ function renderAylikContent(month){
         kapanis = bulAylikKapanis(month);
         devamEt();
       }).catch(function(err){
-        var kapanisGosterimBox = document.getElementById('ay_kapanis_gosterim');
-        if(kapanisGosterimBox) kapanisGosterimBox.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
+        console.error(err);
         devamEt();
       });
     } else {
       devamEt();
     }
   }).catch(function(err){
-    var kapanisGosterimBox = document.getElementById('ay_kapanis_gosterim');
-    if(kapanisGosterimBox) kapanisGosterimBox.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
     var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
     if(gosterimBox) gosterimBox.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
+    var elekStat = document.getElementById('ay_tuketilen_elektrik_stat');
+    if(elekStat) elekStat.innerHTML = '<small>hata</small>';
+    var maasStat = document.getElementById('ay_anlik_maas_stat');
+    if(maasStat) maasStat.innerHTML = '<small>hata</small>';
   });
 
 
