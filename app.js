@@ -2886,6 +2886,12 @@ function renderDigerBirimPanel(c){
 // Bir kayıt listesindeki TÜM BENZERSİZ AYLAR için Ortak İşçilik Payı'nın TL/kg (ya da TL/adet)
 // ORANINI önceden hesaplayıp {ay: oran} haritası olarak döndürür — Kayıtlar tablosundaki HER
 // SATIR, kendi ait olduğu ayın oranını kullanabilsin diye (farklı aylar farklı kg oranına sahip olabilir).
+// Bir kayıt listesindeki TÜM BENZERSİZ AYLAR için Ortak İşçilik Payı'nın TL/SAAT oranını önceden
+// hesaplayıp {ay: oran} haritası olarak döndürür — Kayıtlar tablosundaki HER SATIR, kendi ait
+// olduğu ayın oranını KENDİ SÜRESİYLE (gosterilenSure) çarparak payını alır. SAAT bazlı olması,
+// normal Agromel/Granül/Sulu Kırma maaşlarıyla (maaş/225*süre) AYNI mantığı kullanması içindir —
+// KG bazlı olsaydı, ayın büyük bir kısmını oluşturan TEK bir kayıt orantısız derecede büyük bir
+// pay alırdı (vardiya süresinden bağımsız olarak).
 function ortakIscilikOranHaritasi(entries, tarihAlaniAdi, granulVeri, capakVeri, personelListesi, hangiTaraf){
   var aylar = {};
   entries.forEach(function(e){ if(e[tarihAlaniAdi]) aylar[e[tarihAlaniAdi].slice(0,7)] = true; });
@@ -2893,22 +2899,24 @@ function ortakIscilikOranHaritasi(entries, tarihAlaniAdi, granulVeri, capakVeri,
   Object.keys(aylar).forEach(function(ay){
     var pay = ortakIscilikPayiHesapla(ay, granulVeri, capakVeri, personelListesi);
     var toplamPay = hangiTaraf==='granul' ? pay.granulPay : pay.capakPay;
-    var ayKg = hangiTaraf==='granul' ? pay.granulKg : pay.capakKg;
-    harita[ay] = ayKg ? toplamPay/ayKg : 0;
+    var aylikFiyat = bulAylikFiyat(ay, hangiTaraf==='granul' ? granulVeri : capakVeri);
+    var aylikCalismaSuresi = aylikFiyat ? aylikFiyat.aylikCalismaSuresi : 0;
+    harita[ay] = aylikCalismaSuresi ? toplamPay/aylikCalismaSuresi : 0;
   });
   return harita;
 }
 
-// ortakOranHaritasi: {ay: TL/kg} — opsiyonel. Verilirse, her satırın kendi ait olduğu AYIN Ortak
-// İşçilik Payı oranı (Çapak+Granül arası paylaşılan personelin kg'ye bölünmüş payı) satırın
+// ortakOranHaritasi: {ay: TL/saat} — opsiyonel. Verilirse, her satırın kendi ait olduğu AYIN Ortak
+// İşçilik Payı oranı (Çapak+Granül arası paylaşılan personelin SAATE bölünmüş payı, normal
+// maaş/225*süre formülüyle TUTARLI) satırın KENDİ SÜRESİYLE (gosterilenSure) çarpılarak
 // maliyetine EKLENİR — Panel/Bilanço ile TUTARLI bir "gerçek" toplam maliyet gösterilsin diye.
 function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
   var rows = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(function(e){
     var cst = computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
-    var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[e.tarih.slice(0,7)]) || 0;
-    var ekPay = ortakOran * (Number(e.kg)||0);
+    var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[e.tarih.slice(0,7)]) || 0; // TL/saat
+    var ekPay = ortakOran * cst.gosterilenSure; // bu kaydın kendi süresine göre payı
     var gercekToplam = cst.toplamMaliyet + ekPay;
-    var gercekBirim = cst.birimMaliyet + ortakOran;
+    var gercekBirim = (Number(e.kg)||0) ? gercekToplam / (Number(e.kg)||0) : cst.birimMaliyet;
     var parasal = cst.maliyetGirildi
       ? '<td>'+fmt(cst.toplamElektrik)+'</td><td>'+fmt(cst.toplamSu)+'</td><td>'+fmt(cst.toplamIscilik + ekPay)+'</td><td>'+fmt(gercekToplam)+'</td><td>'+fmt(gercekBirim)+'</td>'
       : '<td colspan="5" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
@@ -4673,24 +4681,26 @@ function renderAylikContentCapak(month){
       var costsGuncel = list.map(function(cu){ return computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak')); });
       var totalCostTemelGuncel = costsGuncel.reduce(function(s2,c){ return s2+c.toplamMaliyet; },0);
       var perProductGuncel = {};
-      STATE.merkeziCinsler.capakCinsleri.forEach(function(p){ perProductGuncel[p.ad] = {uretilen:0, kullanilan:0, cost:0, days:new Set()}; });
+      STATE.merkeziCinsler.capakCinsleri.forEach(function(p){ perProductGuncel[p.ad] = {uretilen:0, kullanilan:0, cost:0, sure:0, days:new Set()}; });
       list.forEach(function(cu,i){
         var cc = cu.capakCinsi || cu.urun;
-        if(!perProductGuncel[cc]) perProductGuncel[cc] = {uretilen:0, kullanilan:0, cost:0, days:new Set()};
+        if(!perProductGuncel[cc]) perProductGuncel[cc] = {uretilen:0, kullanilan:0, cost:0, sure:0, days:new Set()};
         perProductGuncel[cc].uretilen += Number(cu.uretilenCapak);
         perProductGuncel[cc].kullanilan += Number(cu.kullanilanHurda);
         perProductGuncel[cc].cost += costsGuncel[i].toplamMaliyet;
+        perProductGuncel[cc].sure += costsGuncel[i].gosterilenSure;
         perProductGuncel[cc].days.add(cu.tarih);
       });
 
       var ortak = kapaliMi ? ortakIscilikPayiHesapla(month, granulVeri, STATE.birimVeri, personelListesi) : {capakPay:0};
       var ortakPay = ortak.capakPay;
-      var ortakOran = totalUretilen ? ortakPay/totalUretilen : 0;
+      // SAAT bazlı oran (normal Sulu Kırma maaş formülüyle -- maaş/225*süre -- TUTARLI olsun diye).
+      var ortakSaatlikOran = (kapaliMi && aylikFiyat.aylikCalismaSuresi) ? ortakPay/aylikFiyat.aylikCalismaSuresi : 0;
 
       var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
       if(gosterimBox){
         gosterimBox.innerHTML = ortakPay>0
-          ? '<div class="note">Bu ay Genel Fabrika &gt; Personel\'de "Ortak" isaretli personelin toplam maasi: <b class="mono" style="color:var(--text);">'+fmt(ortak.ortakMaas)+' TL</b>. Granul '+fmt(ortak.granulKg)+' kg / Capak '+fmt(ortak.capakKg)+' kg uretmis -- bu birime dusen pay: <b class="mono" style="color:var(--text);">'+fmt(ortakPay)+' TL</b> (asagidaki toplamlara otomatik eklendi).</div>'
+          ? '<div class="note">Bu ay Genel Fabrika &gt; Personel\'de "Ortak" isaretli personelin toplam maasi: <b class="mono" style="color:var(--text);">'+fmt(ortak.ortakMaas)+' TL</b>. Granul '+fmt(ortak.granulKg)+' kg / Capak '+fmt(ortak.capakKg)+' kg uretmis -- bu birime dusen pay: <b class="mono" style="color:var(--text);">'+fmt(ortakPay)+' TL</b> (asagidaki toplamlara otomatik eklendi, kayitlara AYIN VARDIYA SURESINE gore -- maas/225*sure formuluyle -- dagitilir).</div>'
           : '<div class="note">Genel Fabrika &gt; Personel\'de "Capak Uretim Birimi ve Granul Birimi (Ortak)" isaretli personel yok (ya da bu ay hic uretim yapilmamis) -- ek bir pay hesaplanmadi.</div>';
       }
 
@@ -4710,7 +4720,7 @@ function renderAylikContentCapak(month){
             var v = perProductGuncel[ad];
             var fire = v.kullanilan - v.uretilen;
             var firePct = v.kullanilan ? (fire/v.kullanilan*100) : 0;
-            var vCost = v.cost + (v.uretilen * ortakOran);
+            var vCost = v.cost + (v.sure * ortakSaatlikOran);
             return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
               '<td>'+fmtKg(v.uretilen)+'</td><td>'+fmtKg(v.kullanilan)+'</td>'+
               '<td>'+(v.kullanilan?('<b style="color:'+(fire<0?'var(--danger)':'var(--amber)')+';">'+fmt(firePct)+'%</b>'):'--')+'</td>'+
@@ -4723,7 +4733,7 @@ function renderAylikContentCapak(month){
 
       var kayitlarWrap = document.getElementById('ay_kayitlar_tablo_wrap');
       if(kayitlarWrap && list.length>0){
-        var oranHaritasi = {}; oranHaritasi[month] = ortakOran;
+        var oranHaritasi = {}; oranHaritasi[month] = ortakSaatlikOran;
         kayitlarWrap.innerHTML = renderCapakUretimKayitTablosu(list, kapaliMi, oranHaritasi);
       }
     }
@@ -4760,10 +4770,10 @@ function renderCapakUretimKayitTablosu(list, kapaliMi, ortakOranHaritasi){
     var fire = Number(cu.kullanilanHurda) - Number(cu.uretilenCapak);
     var firePct = cu.kullanilanHurda ? (fire/cu.kullanilanHurda*100) : 0;
     var cst = computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak'));
-    var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[cu.tarih.slice(0,7)]) || 0;
-    var ekPay = ortakOran * (Number(cu.uretilenCapak)||0);
+    var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[cu.tarih.slice(0,7)]) || 0; // TL/saat
+    var ekPay = ortakOran * cst.gosterilenSure; // bu kaydın kendi süresine göre payı
     var gercekToplam = cst.toplamMaliyet + ekPay;
-    var gercekBirim = cst.birimMaliyet + ortakOran;
+    var gercekBirim = (Number(cu.uretilenCapak)||0) ? gercekToplam / (Number(cu.uretilenCapak)||0) : cst.birimMaliyet;
     var parasal = cst.maliyetGirildi
       ? '<td>'+fmt(cst.elektrikMaliyeti)+'</td><td>'+fmt(cst.suMaliyeti)+'</td><td>'+fmt(cst.iscilikMaliyeti + ekPay)+'</td><td>'+fmt(gercekToplam)+'</td><td>'+fmt(gercekBirim)+'</td>'
       : '<td colspan="5" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
@@ -4892,22 +4902,26 @@ function renderAylikContent(month){
       var costsGuncel = list.map(function(e){ return computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
       var totalCostTemelGuncel = costsGuncel.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
       var perProductGuncel = {};
-      STATE.merkeziCinsler.urunler.forEach(function(p){ perProductGuncel[p.ad] = {kg:0, cost:0, days:new Set()}; });
+      STATE.merkeziCinsler.urunler.forEach(function(p){ perProductGuncel[p.ad] = {kg:0, cost:0, sure:0, days:new Set()}; });
       list.forEach(function(e,i){
-        if(!perProductGuncel[e.urun]) perProductGuncel[e.urun] = {kg:0, cost:0, days:new Set()};
+        if(!perProductGuncel[e.urun]) perProductGuncel[e.urun] = {kg:0, cost:0, sure:0, days:new Set()};
         perProductGuncel[e.urun].kg += Number(e.kg);
         perProductGuncel[e.urun].cost += costsGuncel[i].toplamMaliyet;
+        perProductGuncel[e.urun].sure += costsGuncel[i].gosterilenSure;
         perProductGuncel[e.urun].days.add(e.tarih);
       });
 
       var ortak = kapaliMi ? ortakIscilikPayiHesapla(month, STATE.birimVeri, capakVeri, personelListesi) : {granulPay:0};
       var ortakPay = ortak.granulPay;
-      var ortakOran = totalKg ? ortakPay/totalKg : 0;
+      // SAAT bazlı oran (normal Agromel/Granül maaş formülüyle -- maaş/225*süre -- TUTARLI olsun
+      // diye) — KG bazlı DEĞİL, aksi halde ayın büyük kısmını oluşturan TEK bir kayıt/ürün,
+      // vardiya süresinden bağımsız olarak orantısız büyük bir pay alırdı.
+      var ortakSaatlikOran = (kapaliMi && aylikFiyat.aylikCalismaSuresi) ? ortakPay/aylikFiyat.aylikCalismaSuresi : 0;
 
       var gosterimBox = document.getElementById('ay_ortak_iscilik_gosterim');
       if(gosterimBox){
         gosterimBox.innerHTML = ortakPay>0
-          ? '<div class="note">Bu ay Genel Fabrika &gt; Personel\'de "Ortak" isaretli personelin toplam maasi: <b class="mono" style="color:var(--text);">'+fmt(ortak.ortakMaas)+' TL</b>. Granul '+fmt(ortak.granulKg)+' kg / Capak '+fmt(ortak.capakKg)+' kg uretmis -- bu birime dusen pay: <b class="mono" style="color:var(--text);">'+fmt(ortakPay)+' TL</b> (asagidaki toplamlara otomatik eklendi).</div>'
+          ? '<div class="note">Bu ay Genel Fabrika &gt; Personel\'de "Ortak" isaretli personelin toplam maasi: <b class="mono" style="color:var(--text);">'+fmt(ortak.ortakMaas)+' TL</b>. Granul '+fmt(ortak.granulKg)+' kg / Capak '+fmt(ortak.capakKg)+' kg uretmis -- bu birime dusen pay: <b class="mono" style="color:var(--text);">'+fmt(ortakPay)+' TL</b> (asagidaki toplamlara otomatik eklendi, kayitlara AYIN VARDIYA SURESINE gore -- maas/225*sure formuluyle -- dagitilir).</div>'
           : '<div class="note">Genel Fabrika &gt; Personel\'de "Capak Uretim Birimi ve Granul Birimi (Ortak)" isaretli personel yok (ya da bu ay hic uretim yapilmamis) -- ek bir pay hesaplanmadi.</div>';
       }
 
@@ -4925,7 +4939,7 @@ function renderAylikContent(month){
         tabloWrap.innerHTML = '<table><thead><tr><th>Urun</th><th>Toplam Kg</th><th>Toplam Maliyet (TL)</th><th>Ort. Birim (TL/kg)</th><th>Uretim Gunu</th></tr></thead><tbody>'+
           Object.keys(perProductGuncel).map(function(ad){
             var v = perProductGuncel[ad];
-            var vCost = v.cost + (v.kg * ortakOran);
+            var vCost = v.cost + (v.sure * ortakSaatlikOran);
             return '<tr><td class="txt"><span class="tag '+tagClassFor(ad)+'">'+escapeHtml(ad)+'</span></td>'+
               '<td>'+fmtKg(v.kg)+'</td><td>'+fmt(vCost)+'</td>'+
               '<td>'+(v.kg?fmt(vCost/v.kg):'--')+'</td>'+
@@ -4936,7 +4950,7 @@ function renderAylikContent(month){
 
       var kayitlarWrap = document.getElementById('ay_kayitlar_tablo_wrap');
       if(kayitlarWrap && list.length>0){
-        var oranHaritasi = {}; oranHaritasi[month] = ortakOran;
+        var oranHaritasi = {}; oranHaritasi[month] = ortakSaatlikOran;
         kayitlarWrap.innerHTML = renderEntryTable(list, false, false, oranHaritasi);
       }
     }
@@ -5538,7 +5552,7 @@ function computeCapakMaliyet(kayit, birimVeriOverride, vardiyaGrupToplamKgOverri
   var birimMaliyet = grupKg ? toplamMaliyetVardiya / grupKg : 0;
   var toplamMaliyet = toplamMaliyetVardiya * pay;
   return {
-    sure: sure, maliyetGirildi: true,
+    sure: sure, gosterilenSure: sure*pay, maliyetGirildi: true,
     elektrikMaliyeti: elektrikMaliyetiVardiya*pay, suMaliyeti: suMaliyetiVardiya*pay, iscilikMaliyeti: iscilikMaliyetiVardiya*pay,
     toplamMaliyet: toplamMaliyet, birimMaliyet: birimMaliyet, toplamMaliyetVardiya: toplamMaliyetVardiya
   };
@@ -5577,7 +5591,7 @@ function computeBidonMaliyet(entry, birimVeriOverride, vardiyaGrupToplamKgOverri
   var birimMaliyet = grupKg ? toplamMaliyetVardiya / grupKg : 0;
   var toplamMaliyet = toplamMaliyetVardiya * pay;
   return {
-    sure: sure, maliyetGirildi: true,
+    sure: sure, gosterilenSure: sure*pay, maliyetGirildi: true,
     elektrikMaliyeti: elektrikMaliyetiVardiya*pay, suMaliyeti: suMaliyetiVardiya*pay, iscilikMaliyeti: iscilikMaliyetiVardiya*pay,
     toplamMaliyet: toplamMaliyet, birimMaliyet: birimMaliyet, toplamMaliyetVardiya: toplamMaliyetVardiya
   };
