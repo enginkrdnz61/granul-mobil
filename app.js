@@ -1822,11 +1822,30 @@ function renderGenelFabrikaStokMaliyet(c){
       // havuzdur, normal üretimin ortalama maliyetini yanıltmasın diye kendi tablosunda gösterilir.
       var iscilikStok = computeIscilikGranulStoku(granulVeri);
       var iscilikToplamKg = mc.urunler.reduce(function(s,p){ return s+(iscilikStok[p.ad]||0); },0);
+      var fasonDokumHtml = '';
       if(iscilikToplamKg > 0){
         fasonIcerikHtml = stokMaliyetTablosuHTML(mc.urunler, iscilikStok, function(ad){ return granulCinsiIscilikStokMaliyeti(ad, granulVeri); }, 'kg');
         mc.urunler.forEach(function(p){
           var stok = iscilikStok[p.ad]||0, maliyet = granulCinsiIscilikStokMaliyeti(p.ad, granulVeri);
           duzKayitlar.push({cins:p.ad+' (Fason)', stok:stok, maliyet:maliyet, deger:stok*maliyet});
+        });
+        // ŞEFFAF DÖKÜM: hangi kayıt DAHİL, hangisi (o ayın elektrik fiyatı girilmemiş olduğu için)
+        // HARİÇ tutuldu — kullanıcının "bu ortalama neden böyle çıktı" sorusunu kendi başına
+        // yanıtlayabilmesi için. Sadece stoğu OLAN cinsler için gösterilir.
+        mc.urunler.filter(function(p){ return (iscilikStok[p.ad]||0) > 0; }).forEach(function(p){
+          var dokum = granulCinsiIscilikDokumu(p.ad, granulVeri);
+          if(dokum.length === 0) return;
+          var haricSayisi = dokum.filter(function(d){ return !d.dahil; }).length;
+          fasonDokumHtml += '<div class="note" style="margin:14px 0 6px;">'+escapeHtml(p.ad)+
+            (haricSayisi>0 ? ' — <span style="color:var(--danger);">'+haricSayisi+' kayıt, o ayın elektrik fiyatı girilmediği için HESABA KATILMADI</span>' : '')+'</div>'+
+            '<table><thead><tr><th>Tarih</th><th>Vardiya</th><th>Kg</th><th>Durum</th><th>Katkı (TL)</th></tr></thead><tbody>'+
+            dokum.map(function(d){
+              return '<tr'+(d.dahil?'':' style="opacity:0.5;"')+'><td class="txt">'+escapeHtml(tarihGoster(d.tarih))+'</td>'+
+                '<td class="txt">'+(d.vardiya==='gece'?'Gece':'Gündüz')+'</td><td>'+fmtKg(d.kg)+'</td>'+
+                '<td class="txt">'+(d.dahil?'<span style="color:#2ea043;">Dahil</span>':'<span style="color:var(--danger);">Hariç ('+escapeHtml(d.ay)+' fiyatı yok)</span>')+'</td>'+
+                '<td>'+(d.dahil?fmt(d.katki):'—')+'</td></tr>';
+            }).join('')+
+            '</tbody></table>';
         });
       }
     } else if(secili.birim.id === 'capak-uretim-birimi'){
@@ -1857,7 +1876,12 @@ function renderGenelFabrikaStokMaliyet(c){
       (fasonIcerikHtml ?
         '<div class="section-title" style="margin-top:16px;">Fason İşçilik Stoğu</div>'+
         '<div class="callout">Bu, müşterinin KENDİ hammaddesiyle (bedelsiz çapak) sizin ürettiğiniz granül stoğudur — çapak maliyeti 0'+"'"+'dır ama elektrik/su/işçilik maliyeti YİNE DE vardır. Yukarıdaki "kendi üretimim" tablosundan TAMAMEN AYRI tutulur; karıştırılırsa normal üretimin ortalama maliyeti yanıltıcı şekilde düşük görünür.</div>'+
-        '<div class="card">'+fasonIcerikHtml+'</div>'
+        '<div class="card">'+fasonIcerikHtml+'</div>'+
+        (fasonDokumHtml ?
+          '<div class="section-title" style="margin-top:16px;">Detaylı Döküm — Hangi Kayıt Nasıl Katkı Yaptı</div>'+
+          '<div class="callout">Bu, yukarıdaki ortalama maliyetin ARKASINDAKİ HER KAYDI gösterir. Bir kayıt, ait olduğu ayın elektrik fiyatı (Genel Fabrika &gt; Parametreler &gt; Aylık Fiyatlar'+"'"+'dan) girilmemişse "Hariç" olarak işaretlenir ve ortalamaya HİÇ katılmaz.</div>'+
+          '<div class="card">'+fasonDokumHtml+'</div>'
+          : '')
         : '')+'';
 
     Array.prototype.forEach.call(c.querySelectorAll('[data-stokm-alt]'), function(b){
@@ -5299,6 +5323,29 @@ function granulCinsiKgMaliyeti(granulCinsi, granulBirimVerisi, capakBirimVerisi)
 // şekilde düşürmesin (bedelsiz çapak, normal üretimin ortalamasını suni olarak aşağı çeker).
 // Çapak maliyeti HER ZAMAN 0'dır (bedelsiz) — ama elektrik/su/işçilik maliyeti YİNE DE vardır
 // (üretim süreci yine enerji ve işçilik harcar), bu yüzden toplam maliyet 0 DEĞİLDİR.
+// granulCinsiIscilikStokMaliyeti'nin ARKASINDA HANGİ KAYITLARIN olduğunu, hangilerinin (fiyat
+// eksikliği nedeniyle) hariç tutulduğunu ŞEFFAF şekilde gösterir — kullanıcının "bu rakam neden
+// böyle çıktı" sorusunu kendi başına yanıtlayabilmesi için (Stok Maliyetleri ekranında "Detay"
+// olarak gösterilir).
+function granulCinsiIscilikDokumu(granulCinsi, granulBirimVerisi){
+  var satirlar = [];
+  (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi && e.capakKaynagi === 'iscilik'; })
+    .sort(function(a,b){ return a.tarih.localeCompare(b.tarih); })
+    .forEach(function(e){
+      var kg = Number(e.kg)||0;
+      if(!kg) return;
+      var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
+      satirlar.push({
+        tarih: e.tarih, vardiya: e.vardiya, kg: kg,
+        dahil: cst.maliyetGirildi,
+        katki: cst.maliyetGirildi ? cst.toplamMaliyet : 0,
+        ay: e.tarih.slice(0,7)
+      });
+    });
+  return satirlar;
+}
+
+
 function granulCinsiIscilikStokMaliyeti(granulCinsi, granulBirimVerisi){
   var toplamKg = 0, toplamMaliyet = 0;
   (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi && e.capakKaynagi === 'iscilik'; }).forEach(function(e){
