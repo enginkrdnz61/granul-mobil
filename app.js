@@ -2645,8 +2645,13 @@ function renderPanel(c){
 
   // "Bu Ayki Durum" kartı ASENKRON dolduruluyor çünkü Ortak İşçilik Payı'nı (Çapak Üretim
   // Birimi ile PAYLAŞILAN personelin kg oranına göre bölüşümü) hesaplayabilmek için Çapak Üretim
-  // Birimi'nin o ayki verisine (kg üretimi) ihtiyaç var — Bilanço'dakiyle BİREBİR AYNI mantık,
-  // artık Panel'de de tutarlı şekilde gösteriliyor.
+  // Birimi'nin o ayki verisine (kg üretimi) ihtiyaç var.
+  //
+  // ÖNEMLİ: Ortak İşçilik'in TAM AYLIK payı DEĞİL, bugüne kadar KAYITLI üretimin vardiya süresine
+  // orantılı ("anlık") kısmı kullanılır -- Aylık Rapor'daki "Anlık Personel Maaşı" ile TUTARLI
+  // olsun diye. Aksi halde, ay başında (henüz az üretim varken) tam aylık pay bölününce maliyet
+  // saçma derecede yüksek görünürdü (örn. ayın 2'sinde 500 kg üretilmişken TÜM ayın Ortak
+  // maaşı bu 500 kg'ye bölünseydi).
   var buNesil = RENDER_NESLI;
   Promise.all([window.api.getBirimData('capak-uretim-birimi'), window.api.getPersonelListesi()]).then(function(sonuc){
     if(buNesil !== RENDER_NESLI) return;
@@ -2654,11 +2659,15 @@ function renderPanel(c){
     var monthCosts = monthly.map(function(e){ return computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg')); });
     var monthMaliyetVar = bulAylikFiyat(monthKey, STATE.birimVeri) !== null;
     var monthCostTemel = monthCosts.reduce(function(s,c){ return s+c.toplamMaliyet; },0);
-    var ortakPay = 0;
+    var ortakPaySoFar = 0;
     if(monthMaliyetVar){
-      ortakPay = ortakIscilikPayiHesapla(monthKey, STATE.birimVeri, capakVeri, personelListesi).granulPay;
+      var ortak = ortakIscilikPayiHesapla(monthKey, STATE.birimVeri, capakVeri, personelListesi);
+      var aylikFiyatBu = bulAylikFiyat(monthKey, STATE.birimVeri);
+      var ortakSaatlikOran = aylikFiyatBu.aylikCalismaSuresi ? ortak.granulPay/aylikFiyatBu.aylikCalismaSuresi : 0;
+      var toplamSureBuAy = monthCosts.reduce(function(s,c){ return s+c.gosterilenSure; },0);
+      ortakPaySoFar = ortakSaatlikOran * toplamSureBuAy;
     }
-    var monthCost = monthCostTemel + ortakPay;
+    var monthCost = monthCostTemel + ortakPaySoFar;
     var monthUnit = monthKg ? monthCost/monthKg : 0;
     var box = document.getElementById('panel_ay_durum'); if(!box) return;
     box.innerHTML =
@@ -2666,7 +2675,7 @@ function renderPanel(c){
       '<div class="grid grid-2">'+
         '<div class="card"><h3>Toplam Üretim / Maliyet</h3>'+
           '<div class="stat" style="margin-bottom:10px;">'+fmtKg(monthKg)+'<small>kg</small></div>'+
-          '<div class="stat" style="font-size:18px; color:var(--muted); margin-bottom:6px;">'+(monthMaliyetVar?fmt(monthCost)+' <small>TL toplam maliyet'+(ortakPay>0?' — Ortak İşçilik Payı dahil':'')+'</small>':'<small>Maliyet henüz girilmedi</small>')+'</div>'+
+          '<div class="stat" style="font-size:18px; color:var(--muted); margin-bottom:6px;">'+(monthMaliyetVar?fmt(monthCost)+' <small>TL toplam maliyet'+(ortakPaySoFar>0?' — Ortak İşçilik Payı dahil':'')+'</small>':'<small>Maliyet henüz girilmedi</small>')+'</div>'+
           (monthMaliyetVar ? '<div class="note">Ort. birim maliyet: <b class="mono" style="color:var(--text);">'+fmt(monthUnit)+' TL/kg</b></div>' : '')+
         '</div>'+
         '<div class="card"><h3>Ürün Dağılımı (kg)</h3><div class="chart-wrap" style="height:180px;"><canvas id="panelDonut"></canvas></div></div>'+
