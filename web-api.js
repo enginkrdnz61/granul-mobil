@@ -97,6 +97,7 @@
     getMerkeziCinsler: function () { return Promise.resolve(VERI.merkeziCinsler); },
     getMerkeziSatinAlmalar: function () { return Promise.resolve(VERI.merkeziSatinAlmalar); },
     getMusteriler: function () { return Promise.resolve({ musteriler: VERI.musteriler, cariHareketler: VERI.cariHareketler }); },
+    getPersonelListesi: function () { return Promise.resolve(VERI.personelListesi || []); },
     getBekleyenIslemler: function () { return Promise.resolve(VERI.bekleyenIslemler); },
     getGeriBildirimler: function () { return Promise.resolve(VERI.geriBildirimler); },
     getMesajlarim: function (kullaniciId) {
@@ -112,12 +113,12 @@
     'addBekleyenIslem', 'addBirim', 'addCapakCinsi', 'addCapakGirisi', 'addCapakSatisi', 'addCapakUretimi',
     'addCariHareket', 'addEkKategori', 'addEkKategoriOge', 'addEkParametre', 'addEntry', 'addGeriBildirim',
     'addGranulGirisi', 'addHammaddeCinsi', 'addHammaddeGirisi', 'addHurdaCinsi', 'addHurdaGirisi',
-    'addIscilikCapakGirisi', 'addKullanici', 'addMusteri', 'addMusteriSatisi', 'addPersonel', 'addUnvan', 'addUrun',
+    'addIscilikCapakGirisi', 'addKullanici', 'addMusteri', 'addMusteriSatisi', 'addPersonel', 'addPersonelMerkezi', 'addUnvan', 'addUrun',
     'deleteAylikKapanis', 'deleteBekleyenIslem', 'deleteBirim', 'deleteCapakCinsi', 'deleteCapakGirisi',
     'deleteCapakSatisi', 'deleteCapakUretimi', 'deleteCariHareket', 'deleteCopItem', 'deleteEkKategori',
     'deleteEkKategoriOge', 'deleteEkParametre', 'deleteEntry', 'deleteGeriBildirim', 'deleteGranulGirisi',
     'deleteHammaddeCinsi', 'deleteHammaddeGirisi', 'deleteHurdaCinsi', 'deleteHurdaGirisi', 'deleteIscilikCapakGirisi',
-    'deleteKullanici', 'deleteMesaj', 'deleteMusteri', 'deleteMusteriFiyat', 'deleteMusteriSatisi', 'deletePersonel',
+    'deleteKullanici', 'deleteMesaj', 'deleteMusteri', 'deleteMusteriFiyat', 'deleteMusteriSatisi', 'deletePersonel', 'deletePersonelMerkezi',
     'deleteUnvan', 'deleteUrun', 'emptyCopKutusu', 'markGeriBildirimDurum', 'markMesajlarOkundu', 'reorderBirim',
     'reorderCapakCinsi', 'reorderEkKategori', 'reorderEkKategoriOge', 'reorderHammaddeCinsi', 'reorderHurdaCinsi',
     'reorderUrun', 'restoreCop', 'restoreDailyBackup', 'saveAylikKapanis', 'saveSettings', 'sendMesaj',
@@ -127,7 +128,7 @@
     'updateEkParametre', 'updateEntry', 'updateGeriBildirim', 'updateGranulGirisi', 'updateHammaddeCinsi',
     'updateHammaddeGirisi', 'updateHurdaCinsi', 'updateHurdaCinsiGramaj', 'updateHurdaGirisi', 'updateIscilikCapakGirisi',
     'updateKullanici', 'updateKullaniciIzinBirim', 'updateKullaniciSatinAlmaIzni', 'updateMusteri', 'updateMusteriFiyat',
-    'updateMusteriSatisi', 'updatePersonel', 'updateUrunAdi', 'updateUrunGramaj', 'updateUrunRate'
+    'updateMusteriSatisi', 'updatePersonel', 'updatePersonelMerkezi', 'updateUrunAdi', 'updateUrunGramaj', 'updateUrunRate'
   ].forEach(function (isim) { api[isim] = saltOkunurRed(isim); });
 
   window.api = api;

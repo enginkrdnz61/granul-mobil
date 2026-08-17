@@ -950,6 +950,7 @@ function tabListDahili(){
     if(izinVar('aylik')) tabs.push({id:'aylik', label:'Aylık Rapor'});
     if(izinVar('personel')) tabs.push({id:'personel', label:'Personel'});
     if(izinVar('stok')) tabs.push({id:'stok', label:'Stok'});
+    if(izinVar('stok')) tabs.push({id:'stokmaliyet', label:'Stok Maliyetleri'});
     if(izinVar('parametreler')) tabs.push({id:'parametreler', label:'Parametreler'});
     if(isAdmin()) tabs.push({id:'onaybekleyenler', label:onayBekleyenlerEtiket()});
     if(isMudur()) tabs.push({id:'onaydurumum', label:onayDurumEtiketi()});
@@ -1265,6 +1266,7 @@ function renderTabContent(){
     if(activeTab==='aylik') return renderGenelFabrikaAylikRapor(c);
     if(activeTab==='personel') return renderGenelFabrikaPersonel(c);
     if(activeTab==='stok') return renderGenelFabrikaStok(c);
+    if(activeTab==='stokmaliyet') return renderGenelFabrikaStokMaliyet(c);
     if(activeTab==='parametreler') return renderGenelFabrikaParametreler(c);
     if(activeTab==='ayarlar') return renderAyarlar(c);
     return;
@@ -1587,6 +1589,27 @@ function tumUrunlerBirlesik(veri){
 }
 
 var stokAltSekme = 'tumu'; // 'tumu' | birim.id — hangi birimin stoğu tek başına gösteriliyor
+var stokMaliyetAltSekme = null; // "Stok Maliyetleri" sekmesinde seçili birim.id — "Tümü" YOKTUR, her zaman TEK bir birim seçilidir
+
+// Stok + Ortalama Maliyet (TL/birim) + Toplam Değer (TL) gösteren tablo — stokTablosuHTML'in
+// maliyet bilgili versiyonu. maliyetFn(cinsAdi) o cinsin TL/birim maliyetini döndürmelidir.
+function stokMaliyetTablosuHTML(cinsListesi, ozetMap, maliyetFn, birimEtiketi){
+  if(cinsListesi.length===0) return '<div class="empty">Henüz cins tanımlı değil.</div>';
+  var toplamDeger = 0;
+  var satirlar = cinsListesi.map(function(p){
+    var stok = ozetMap[p.ad] || 0;
+    var maliyet = maliyetFn(p.ad);
+    var deger = stok * maliyet;
+    toplamDeger += deger;
+    return '<tr><td class="txt"><span class="tag '+tagClassFor(p.ad)+'">'+escapeHtml(p.ad)+'</span></td>'+
+      '<td>'+fmtKg(stok)+' '+birimEtiketi+'</td>'+
+      '<td>'+(maliyet?fmt(maliyet)+' TL':'—')+'</td>'+
+      '<td><b>'+fmt(deger)+' TL</b></td></tr>';
+  }).join('');
+  return '<table><thead><tr><th>Cins</th><th>Stok</th><th>Ort. Maliyet (TL/'+birimEtiketi+')</th><th>Toplam Değer (TL)</th></tr></thead><tbody>'+
+    satirlar+
+    '</tbody><tfoot><tr><td colspan="3" class="txt" style="text-align:right;"><b>Toplam Değer</b></td><td><b>'+fmt(toplamDeger)+' TL</b></td></tr></tfoot></table>';
+}
 
 function renderGenelFabrikaStok(c){
   c.innerHTML = '<div class="note">Yükleniyor…</div>';
@@ -1708,51 +1731,250 @@ function renderGenelFabrikaStok(c){
   }).catch(function(err){ c.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>'; });
 }
 
-function renderGenelFabrikaPersonel(c){
+// ============================================================
+// GENEL FABRİKA > STOK MALİYETLERİ — "Stok" sekmesinden AYRI, "Tümü" YOKTUR (her zaman TEK bir
+// birim seçilir), her cins için stok miktarının yanında AĞIRLIKLI ORTALAMA MALİYET (TL/birim) ve
+// TOPLAM DEĞER (TL) de gösterilir. Maliyet zinciri: Hurda (satın alma) → Çapak (hem satın alınan
+// hem hurdadan üretilenin ağırlıklı ortalaması) → Granül (hem satın alınan hem çapaktan üretilenin
+// ağırlıklı ortalaması, üretim payı dahil) → diğer birimlerin ürettiği nihai ürünler (kullandıkları
+// girdinin — hammadde ya da Genel Fabrika Granül'ü — ağırlıklı ortalama maliyetine dayanır).
+// ============================================================
+function renderGenelFabrikaStokMaliyet(c){
   c.innerHTML = '<div class="note">Yükleniyor…</div>';
   var buNesil = RENDER_NESLI;
-  fetchTumBirimVerileri(STATE.aktifBirimId).then(function(sonuclar){
+  fetchHavuzIcinTumVeriler().then(function(hepsi){
     if(buNesil !== RENDER_NESLI) return;
-    var tumPersonel = [];
-    sonuclar.forEach(function(s){
-      (s.veri.personel||[]).forEach(function(p){ tumPersonel.push(Object.assign({}, p, {_birimAdi: s.birim.ad})); });
-    });
-    if(tumPersonel.length===0){
-      c.innerHTML = '<div class="callout">Henüz hiçbir birimde personel tanımlı değil.</div>';
+    var mc = STATE.merkeziCinsler;
+    var havuzOzet = computeHavuzStokOzeti(hepsi, mc);
+    var digerBirimler = hepsi.filter(function(s){ return s.birim.id !== 'genel-fabrika'; });
+    var granulSonuc = hepsi.find(function(s){ return s.birim.id === 'granul-birimi'; });
+    var capakSonuc = hepsi.find(function(s){ return s.birim.id === 'capak-uretim-birimi'; });
+    var granulVeri = granulSonuc ? granulSonuc.veri : {};
+    var capakVeri = capakSonuc ? capakSonuc.veri : {};
+
+    if(digerBirimler.length===0){
+      c.innerHTML = '<div class="empty"><b>Henüz hiç birim tanımlı değil.</b></div>';
       return;
     }
-    c.innerHTML =
-      '<div class="callout" style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;">'+
-        '<span>Tüm birimlerin personel listesinin toplu görünümü (salt okunur — ekleme/düzenleme için ilgili birime gidin).</span>'+
-        '<button class="btn ghost small" id="gf_personel_pdf_btn" style="flex:0 0 auto;">PDF Olarak Dışa Aktar</button>'+
+    // Sekme listesi: "Hurda Cinsleri" (herhangi bir birime bağlı olmayan, zincirin başlangıç
+    // noktası — sadece satın alınır, üretilmez) + her birim (Granül/Çapak Üretim/diğer birimler).
+    var hurdaSekmesiVarMi = mc.hurdaCinsleri.length > 0;
+    var sekmeler = (hurdaSekmesiVarMi ? [{id:'hurda-cinsleri', ad:'Hurda Cinsleri'}] : [])
+      .concat(digerBirimler.map(function(s){ return {id:s.birim.id, ad:s.birim.ad}; }));
+
+    if(!sekmeler.some(function(s){ return s.id === stokMaliyetAltSekme; })){
+      stokMaliyetAltSekme = sekmeler[0].id; // "Tümü" YOK — her zaman geçerli TEK bir sekme seçili olmalı
+    }
+    var seciliSekme = sekmeler.find(function(s){ return s.id === stokMaliyetAltSekme; });
+    var secili = digerBirimler.find(function(s){ return s.birim.id === stokMaliyetAltSekme; }); // hurda-cinsleri için undefined kalır, aşağıda ayrıca ele alınır
+
+    var altSekmeHtml = '<nav class="tabs" style="margin-bottom:18px;">'+
+      sekmeler.map(function(s){
+        return '<button class="'+(stokMaliyetAltSekme===s.id?'active':'')+'" data-stokm-alt="'+s.id+'">'+escapeHtml(s.ad)+'</button>';
+      }).join('')+
+    '</nav>';
+
+    var duzKayitlar = []; // PDF için: {cins, stok, maliyet, deger}
+    var icerikHtml = '';
+    var birimEtiketi = 'kg';
+
+    if(stokMaliyetAltSekme === 'hurda-cinsleri'){
+      icerikHtml = stokMaliyetTablosuHTML(mc.hurdaCinsleri, havuzOzet.hurda, function(ad){ return capakUretimBirimiHurdaOrtalamaFiyat(ad); }, 'kg');
+      mc.hurdaCinsleri.forEach(function(p){
+        var stok = havuzOzet.hurda[p.ad]||0, maliyet = capakUretimBirimiHurdaOrtalamaFiyat(p.ad);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    } else if(secili.birim.id === 'granul-birimi'){
+      icerikHtml = stokMaliyetTablosuHTML(mc.urunler, havuzOzet.granul, function(ad){ return granulCinsiKgMaliyeti(ad, granulVeri, capakVeri); }, 'kg');
+      mc.urunler.forEach(function(p){
+        var stok = havuzOzet.granul[p.ad]||0, maliyet = granulCinsiKgMaliyeti(p.ad, granulVeri, capakVeri);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    } else if(secili.birim.id === 'capak-uretim-birimi'){
+      icerikHtml = stokMaliyetTablosuHTML(mc.capakCinsleri, havuzOzet.capak, function(ad){ return capakCinsiKgMaliyeti(ad, capakVeri); }, 'kg');
+      mc.capakCinsleri.forEach(function(p){
+        var stok = havuzOzet.capak[p.ad]||0, maliyet = capakCinsiKgMaliyeti(p.ad, capakVeri);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    } else {
+      // "Diğer birim" (örn. Şişirme/Enjeksiyon Birimi) — kendi ürettiği nihai ürünlerin stoğu + maliyeti.
+      birimEtiketi = 'adet';
+      var digerOzet = computeStokOzeti(secili.veri, secili.veri, {hurdaGirisleri:[], capakGirisleri:[], granulGirisleri:[]});
+      var digerUrunler = tumUrunlerBirlesik(secili.veri);
+      icerikHtml = stokMaliyetTablosuHTML(digerUrunler, digerOzet.granul, function(ad){ return digerBirimUrunKgMaliyeti(secili.veri, granulVeri, capakVeri, ad); }, 'adet');
+      digerUrunler.forEach(function(p){
+        var stok = digerOzet.granul[p.ad]||0, maliyet = digerBirimUrunKgMaliyeti(secili.veri, granulVeri, capakVeri, p.ad);
+        duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
+      });
+    }
+
+    c.innerHTML = altSekmeHtml +
+      '<div class="callout">Maliyetler, "Genel Fabrika"daki (hem satın alınan hem üretilen) ilgili havuzun BUGÜNE KADARKİ ağırlıklı ortalamasına dayanır. Çapak'+"'"+'ın hammaddesi Hurda, Granül'+"'"+'ün hammaddesi Çapak'+"'"+'tır — her kademe bir öncekinin ortalama maliyetini + kendi üretim payını taşır.</div>'+
+      '<div class="section-title" style="margin-top:16px; display:flex; align-items:center; justify-content:space-between;">'+
+        '<span>'+escapeHtml(seciliSekme.ad)+' — Stok Maliyetleri</span>'+
+        '<button class="btn ghost small" id="stokm_pdf_btn">PDF Olarak Dışa Aktar</button>'+
       '</div>'+
-      '<div class="card"><table><thead><tr><th>Birim</th><th>Ad Soyad</th><th>Ünvan</th><th>Vardiya</th><th>Maaş (TL)</th></tr></thead><tbody>'+
-        tumPersonel.map(function(p){
-          return '<tr><td class="txt"><span class="tag gray">'+escapeHtml(p._birimAdi)+'</span></td>'+
-            '<td class="txt">'+escapeHtml(p.ad)+'</td><td class="txt">'+escapeHtml(p.unvan)+'</td>'+
-            '<td class="txt">'+(p.vardiya==='gece'?'Gece':'Gündüz')+'</td><td>'+fmt(p.maas)+'</td></tr>';
-        }).join('')+
-      '</tbody></table></div>';
-    (document.getElementById('gf_personel_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
+      '<div class="card">'+icerikHtml+'</div>';
+
+    Array.prototype.forEach.call(c.querySelectorAll('[data-stokm-alt]'), function(b){
+      b.addEventListener('click', function(){
+        stokMaliyetAltSekme = b.dataset.stokmAlt;
+        renderGenelFabrikaStokMaliyet(c);
+      });
+    });
+
+    document.getElementById('stokm_pdf_btn').addEventListener('click', function(){
       pdfDisaAktarPenceresiAc({
-        baslik: 'Genel Fabrika — Tüm Birimler Personel Listesi',
-        sutunlar: [
-          {key:'_birimAdi', label:'Birim'}, {key:'ad', label:'Ad Soyad'}, {key:'unvan', label:'Ünvan'},
-          {key:'vardiya', label:'Vardiya'}, {key:'maas', label:'Maaş (TL)'}
-        ],
-        kayitlarGetir: function(){ return tumPersonel; },
-        satirDegeri: function(p, key){
-          if(key === 'vardiya') return p.vardiya==='gece' ? 'Gece' : 'Gündüz';
-          if(key === 'maas') return fmt(p.maas);
-          return p[key] || '';
+        baslik: seciliSekme.ad+' — Stok Maliyetleri',
+        sutunlar: [{key:'cins', label:'Cins'}, {key:'stok', label:'Stok'}, {key:'maliyet', label:'Ort. Maliyet (TL/'+birimEtiketi+')'}, {key:'deger', label:'Toplam Değer (TL)'}],
+        kayitlarGetir: function(){ return duzKayitlar; },
+        satirDegeri: function(k, key){
+          if(key==='stok') return fmtKg(k.stok)+' '+birimEtiketi;
+          if(key==='maliyet'||key==='deger') return fmt(k[key])+' TL';
+          return k[key]||'';
         },
         ozetSatirlari: function(kayitlar){
-          var toplamMaas = kayitlar.reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
-          return [{etiket:'Toplam Personel', deger:String(kayitlar.length)}, {etiket:'Toplam Maaş', deger:fmt(toplamMaas)+' TL'}];
+          var toplamDeger = kayitlar.reduce(function(s,k){ return s+(Number(k.deger)||0); },0);
+          return [{etiket:'Toplam Değer', deger:fmt(toplamDeger)+' TL'}];
         }
       });
     });
   }).catch(function(err){ c.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>'; });
+}
+
+var PERSONEL_MERKEZI_DUZENLE = null; // düzenlenmekte olan merkezi personel kaydının id'si, null = yeni ekleme modu
+
+function birimHedefiEtiketi(birimHedefi, digerBirimSonuclari){
+  if(birimHedefi === 'capak-granul-ortak') return 'Çapak Üretim Birimi ve Granül Birimi (Ortak)';
+  var s = digerBirimSonuclari.find(function(x){ return x.birim.id === birimHedefi; });
+  return s ? s.birim.ad : '(silinmiş birim)';
+}
+
+// ============================================================
+// GENEL FABRİKA > PERSONEL — TÜM personel (isim/ünvan/maaş) artık BURADAN, merkezi olarak
+// yönetilir. Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalıştığı için, bu ikisi
+// "Çapak Üretim Birimi ve Granül Birimi (Ortak)" diye TEK bir hedef olarak seçilir — bu kişilerin
+// maliyeti, Bilanço'da o ayki kg üretim oranına göre iki birim arasında otomatik bölüştürülür
+// (bkz. ortakIscilikPayiHesapla). Her "diğer birim" (Şişirme, Enjeksiyon vb.) kendi ayrı hedefidir.
+// ============================================================
+function renderGenelFabrikaPersonel(c){
+  c.innerHTML = '<div class="note">Yükleniyor…</div>';
+  var buNesil = RENDER_NESLI;
+  Promise.all([
+    fetchTumBirimVerileri(STATE.aktifBirimId),
+    window.api.getPersonelListesi()
+  ]).then(function(sonuclar){
+    if(buNesil !== RENDER_NESLI) return;
+    var digerBirimSonuclari = sonuclar[0].filter(function(s){ return digerBirimMi(s.birim.id); });
+    renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, sonuclar[1]);
+  }).catch(function(err){ c.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>'; });
+}
+
+function renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, personelListesi){
+  var duzenlenen = PERSONEL_MERKEZI_DUZENLE ? personelListesi.find(function(p){ return p.id === PERSONEL_MERKEZI_DUZENLE; }) : null;
+  var birimSecenekleri =
+    '<option value="capak-granul-ortak"'+(duzenlenen&&duzenlenen.birimHedefi==='capak-granul-ortak'?' selected':'')+'>Çapak Üretim Birimi ve Granül Birimi (Ortak)</option>'+
+    digerBirimSonuclari.map(function(s){ return '<option value="'+s.birim.id+'"'+(duzenlenen&&duzenlenen.birimHedefi===s.birim.id?' selected':'')+'>'+escapeHtml(s.birim.ad)+'</option>'; }).join('');
+
+  var siraliHedefler = ['capak-granul-ortak'].concat(digerBirimSonuclari.map(function(s){ return s.birim.id; }));
+
+  c.innerHTML =
+    '<div class="callout">Tüm personel (isim, ünvan, maaş) buradan tek merkezden yönetilir. Çapak Üretim Birimi ile Granül Birimi\'nde AYNI kişiler çalışıyorsa "Çapak Üretim Birimi ve Granül Birimi (Ortak)" seçin — bu kişilerin maliyeti, o ayki kg üretim oranına göre iki birim arasında otomatik bölüştürülür (bkz. her iki birimin Bilanço\'su).</div>'+
+    '<div class="section-title">'+(duzenlenen?'Personeli Düzenle':'Yeni Personel Ekle')+'</div>'+
+    '<div class="card" style="max-width:640px;">'+
+      (duzenlenen ? '<h3 style="margin-bottom:16px; text-transform:none; font-size:16px; color:var(--text);">Kaydı Düzenle</h3>' : '')+
+      '<div class="row">'+
+        '<div class="field"><label>Ad Soyad</label><input type="text" id="pm_ad" value="'+(duzenlenen?escapeHtml(duzenlenen.ad):'')+'" placeholder="Adı Soyadı"></div>'+
+        '<div class="field"><label>Ünvan</label><input type="text" id="pm_unvan" value="'+(duzenlenen?escapeHtml(duzenlenen.unvan||''):'')+'" placeholder="örn. Vardiya Amiri"></div>'+
+      '</div>'+
+      '<div class="row">'+
+        '<div class="field"><label>Birim</label><select id="pm_birim">'+birimSecenekleri+'</select></div>'+
+        '<div class="field"><label>Vardiya</label><select id="pm_vardiya">'+
+          '<option value="gunduz"'+(!duzenlenen||duzenlenen.vardiya!=='gece'?' selected':'')+'>Gündüz</option>'+
+          '<option value="gece"'+(duzenlenen&&duzenlenen.vardiya==='gece'?' selected':'')+'>Gece</option>'+
+        '</select></div>'+
+      '</div>'+
+      '<div class="field"><label>Maaş (TL)</label><input type="number" step="100" id="pm_maas" value="'+(duzenlenen?duzenlenen.maas:'')+'" placeholder="örn. 40000"></div>'+
+      '<button class="btn" id="pm_kaydet">'+(duzenlenen?'Kaydet':'+ Personel Ekle')+'</button>'+
+      (duzenlenen ? ' <button class="btn ghost" id="pm_vazgec">Vazgeç</button>' : '')+
+    '</div>'+
+    '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
+      '<span>Personel Listesi</span>'+(personelListesi.length>0?'<button class="btn ghost small" id="pm_pdf_btn">PDF Olarak Dışa Aktar</button>':'')+
+    '</div>'+
+    (personelListesi.length===0 ? '<div class="empty"><b>Henüz personel eklenmedi</b></div>' :
+      siraliHedefler.map(function(bh){
+        var buGrup = personelListesi.filter(function(p){ return p.birimHedefi === bh; });
+        if(buGrup.length===0) return '';
+        var toplamGunduz = buGrup.filter(function(p){ return p.vardiya!=='gece'; }).reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
+        var toplamGece = buGrup.filter(function(p){ return p.vardiya==='gece'; }).reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
+        return '<div class="section-title" style="margin-top:22px;">'+escapeHtml(birimHedefiEtiketi(bh, digerBirimSonuclari))+
+          ' <span style="font-weight:400; color:var(--muted); font-size:12px;">(Gündüz toplam: '+fmt(toplamGunduz)+' TL — Gece toplam: '+fmt(toplamGece)+' TL)</span></div>'+
+          '<div class="card"><table><thead><tr><th>Ad Soyad</th><th>Ünvan</th><th>Vardiya</th><th>Maaş (TL)</th><th></th></tr></thead><tbody>'+
+            buGrup.slice().sort(function(a,b){ var au=a.unvan==='Vardiya Amiri'?0:1, bu=b.unvan==='Vardiya Amiri'?0:1; return au-bu; }).map(function(p){
+              return '<tr><td class="txt">'+escapeHtml(p.ad)+'</td><td class="txt">'+escapeHtml(p.unvan||'')+'</td>'+
+                '<td class="txt">'+(p.vardiya==='gece'?'Gece':'Gündüz')+'</td><td>'+fmt(p.maas)+'</td>'+
+                '<td style="white-space:nowrap;">'+(canMutate()?('<button class="btn ghost small" data-pm-edit="'+p.id+'">Düzenle</button> <button class="btn danger small" data-pm-del="'+p.id+'">Sil</button>'):'')+'</td></tr>';
+            }).join('')+
+          '</tbody></table></div>';
+      }).join(''));
+
+  document.getElementById('pm_kaydet').addEventListener('click', function(){
+    var btn = this;
+    var ad = document.getElementById('pm_ad').value.trim();
+    var unvan = document.getElementById('pm_unvan').value.trim();
+    var birimHedefi = document.getElementById('pm_birim').value;
+    var vardiya = document.getElementById('pm_vardiya').value;
+    var maas = Number(document.getElementById('pm_maas').value)||0;
+    if(!ad){ alert('Lütfen ad soyad girin.'); return; }
+    var payload = {ad:ad, unvan:unvan, birimHedefi:birimHedefi, vardiya:vardiya, maas:maas};
+    btn.disabled = true;
+    if(duzenlenen){
+      window.api.updatePersonelMerkezi(duzenlenen.id, payload).then(function(liste){
+        PERSONEL_MERKEZI_DUZENLE = null;
+        showToast('Personel güncellendi.');
+        renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, liste);
+      }).catch(function(err){ alert(err.message); btn.disabled=false; });
+    } else {
+      window.api.addPersonelMerkezi(payload).then(function(liste){
+        showToast('Personel eklendi.');
+        renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, liste);
+      }).catch(function(err){ alert(err.message); btn.disabled=false; });
+    }
+  });
+  var vazgecBtn = document.getElementById('pm_vazgec');
+  if(vazgecBtn) vazgecBtn.addEventListener('click', function(){ PERSONEL_MERKEZI_DUZENLE = null; renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, personelListesi); });
+
+  Array.prototype.forEach.call(c.querySelectorAll('[data-pm-edit]'), function(b){
+    b.addEventListener('click', function(){ PERSONEL_MERKEZI_DUZENLE = b.dataset.pmEdit; renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, personelListesi); });
+  });
+  Array.prototype.forEach.call(c.querySelectorAll('[data-pm-del]'), function(b){
+    b.addEventListener('click', function(){
+      var oge = personelListesi.find(function(x){ return x.id === b.dataset.pmDel; });
+      showConfirm('"'+(oge?oge.ad:'')+'" adlı personeli silmek istediğinize emin misiniz?', 'Sil', function(){
+        window.api.deletePersonelMerkezi(b.dataset.pmDel).then(function(liste){
+          showToast('Personel silindi.');
+          renderGenelFabrikaPersonelIcerik(c, digerBirimSonuclari, liste);
+        }).catch(function(err){ alert(err.message); });
+      });
+    });
+  });
+
+  (document.getElementById('pm_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
+    pdfDisaAktarPenceresiAc({
+      baslik: 'Genel Fabrika — Merkezi Personel Listesi',
+      sutunlar: [{key:'_birimEtiketi',label:'Birim'},{key:'ad',label:'Ad Soyad'},{key:'unvan',label:'Ünvan'},{key:'vardiya',label:'Vardiya'},{key:'maas',label:'Maaş (TL)'}],
+      kayitlarGetir: function(){ return personelListesi.map(function(p){ return Object.assign({}, p, {_birimEtiketi: birimHedefiEtiketi(p.birimHedefi, digerBirimSonuclari)}); }); },
+      satirDegeri: function(p, key){
+        if(key==='vardiya') return p.vardiya==='gece'?'Gece':'Gündüz';
+        if(key==='maas') return fmt(p.maas);
+        return p[key]||'';
+      },
+      ozetSatirlari: function(kayitlar){
+        var toplamMaas = kayitlar.reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
+        return [{etiket:'Toplam Personel', deger:String(kayitlar.length)}, {etiket:'Toplam Maaş', deger:fmt(toplamMaas)+' TL'}];
+      }
+    });
+  });
 }
 
 // Salt-okunur cins listesi gösterimi (etiketler halinde) — Genel Fabrika'nın "veri olarak
@@ -2105,15 +2327,17 @@ function genelAramaAc(){
   document.addEventListener('keydown', escKapat);
 
   var buNesil = ++GENEL_ARAMA_NESIL;
-  var tumBirimVeri = null, musteriListesi = null;
+  var tumBirimVeri = null, musteriListesi = null, personelListesi = null;
 
   Promise.all([
     fetchTumBirimVerileri('genel-fabrika'),
-    window.api.getMusteriler()
+    window.api.getMusteriler(),
+    window.api.getPersonelListesi()
   ]).then(function(sonuc){
     if(buNesil !== GENEL_ARAMA_NESIL) return;
     tumBirimVeri = sonuc[0];
     musteriListesi = sonuc[1].musteriler;
+    personelListesi = sonuc[2];
     var sonucBox = document.getElementById('__ga_sonuc');
     if(sonucBox) sonucBox.innerHTML = '<div class="note">Aramak için en az 2 karakter yazın.</div>';
   }).catch(function(err){
@@ -2127,11 +2351,11 @@ function genelAramaAc(){
     if(!sonucBox) return;
     if(sorgu.length < 2){ sonucBox.innerHTML = '<div class="note">Aramak için en az 2 karakter yazın.</div>'; return; }
     if(!tumBirimVeri){ sonucBox.innerHTML = '<div class="note">Yükleniyor…</div>'; return; }
-    genelAramaSonuclariCiz(sonucBox, sorgu, tumBirimVeri, musteriListesi, close);
+    genelAramaSonuclariCiz(sonucBox, sorgu, tumBirimVeri, musteriListesi, personelListesi, close);
   });
 }
 
-function genelAramaSonuclariCiz(sonucBox, sorgu, tumBirimVeri, musteriListesi, close){
+function genelAramaSonuclariCiz(sonucBox, sorgu, tumBirimVeri, musteriListesi, personelListesi, close){
   var s = sorgu.toLocaleLowerCase('tr-TR');
   var sonuclar = []; // {tur, etiket, altEtiket, git}
 
@@ -2155,11 +2379,18 @@ function genelAramaSonuclariCiz(sonucBox, sorgu, tumBirimVeri, musteriListesi, c
     });
   }
 
+  // Personel — artık Genel Fabrika'dan merkezi olarak yönetilir (per-birim eski liste ARTIK
+  // GÜNCELLENMİYOR, buradan hiç okunmaz).
+  (personelListesi||[]).forEach(function(p){
+    if(p.ad.toLocaleLowerCase('tr-TR').indexOf(s)!==-1){
+      var etiket = p.birimHedefi==='capak-granul-ortak' ? 'Çapak Üretim Birimi ve Granül Birimi (Ortak)' : birimHedefiEtiketi(p.birimHedefi, tumBirimVeri.filter(function(x){ return digerBirimMi(x.birim.id); }));
+      var hedefBirimId = p.birimHedefi === 'capak-granul-ortak' ? 'granul-birimi' : p.birimHedefi;
+      sonuclar.push({tur:'Personel', etiket:p.ad, altEtiket:etiket, git:function(){ close(); genelAramaSonucunaGit(hedefBirimId, 'personel'); }});
+    }
+  });
+
   tumBirimVeri.forEach(function(sonucBirim){
     var birim = sonucBirim.birim, veri = sonucBirim.veri;
-    (veri.personel||[]).forEach(function(p){
-      if(p.ad.toLocaleLowerCase('tr-TR').indexOf(s)!==-1) sonuclar.push({tur:'Personel', etiket:p.ad, altEtiket:birim.ad, git:function(){ close(); genelAramaSonucunaGit(birim.id,'personel'); }});
-    });
     if(digerBirimMi(birim.id)){
       tumUrunlerBirlesik(veri).forEach(function(p){
         if(p.ad.toLocaleLowerCase('tr-TR').indexOf(s)!==-1) sonuclar.push({tur:'Ürün Cinsi', etiket:p.ad, altEtiket:birim.ad, git:function(){ close(); genelAramaSonucunaGit(birim.id,'parametreler'); }});
@@ -2786,23 +3017,53 @@ function initIscilikCapakForm(editEntry){
 }
 
 // ---------- Satın Alma > Kayıtlar (Hurda + Çapak + Granül, tek listede, en yeni üstte) ----------
+var SA_KAYITLAR_FILTRE = { baslangic:'', bitis:'', tur:'', cins:'' };
 function renderSatinAlmaKayitlar(c){
   var turEtiket = {hurda:'Hurda', capak:'Çapak', granul:'Granül'};
   var silFonksiyonu = {hurda:'deleteHurdaGirisi', capak:'deleteCapakGirisi', granul:'deleteGranulGirisi'};
-  var hepsi = [];
+  var hepsiFiltresiz = [];
   ['hurda','capak','granul'].forEach(function(tur){
     var kat = SATIN_ALIM_KATEGORILERI[tur];
     (STATE.merkeziSatinAlmalar[kat.stateKey]||[]).forEach(function(g){
-      hepsi.push(Object.assign({tur:tur}, g));
+      hepsiFiltresiz.push(Object.assign({tur:tur}, g));
     });
   });
-  hepsi.sort(function(a,b){ return b.tarih.localeCompare(a.tarih) || (b.olusturmaZamani||'').localeCompare(a.olusturmaZamani||''); });
+  hepsiFiltresiz.sort(function(a,b){ return b.tarih.localeCompare(a.tarih) || (b.olusturmaZamani||'').localeCompare(a.olusturmaZamani||''); });
+
+  var f = SA_KAYITLAR_FILTRE;
+  var hepsi = hepsiFiltresiz.filter(function(g){
+    if(f.baslangic && g.tarih < f.baslangic) return false;
+    if(f.bitis && g.tarih > f.bitis) return false;
+    if(f.tur && g.tur !== f.tur) return false;
+    if(f.cins && g.urun !== f.cins) return false;
+    return true;
+  });
+  // Cins seçenekleri: seçili türe göre daralır (tür seçilmemişse hepsi birlikte gösterilir).
+  var cinsSecenekleri = Array.from(new Set(
+    hepsiFiltresiz.filter(function(g){ return !f.tur || g.tur===f.tur; }).map(function(g){ return g.urun; })
+  )).sort(function(a,b){ return a.localeCompare(b,'tr-TR'); });
 
   var iscilikListe = (STATE.merkeziSatinAlmalar.iscilikCapakGirisleri||[]).slice()
     .sort(function(a,b){ return b.tarih.localeCompare(a.tarih) || (b.olusturmaZamani||'').localeCompare(a.olusturmaZamani||''); });
 
   c.innerHTML =
-    (hepsi.length===0 ? '<div class="empty"><b>Henüz (parayla alınan) satın alma kaydı yok</b></div>' :
+    '<div class="toolbar">'+
+      '<div class="field"><label>Başlangıç</label><input type="date" id="sak_baslangic" value="'+f.baslangic+'"></div>'+
+      '<div class="field"><label>Bitiş</label><input type="date" id="sak_bitis" value="'+f.bitis+'"></div>'+
+      '<div class="field"><label>Tür</label><select id="sak_tur">'+
+        '<option value="">Tümü</option>'+
+        '<option value="hurda"'+(f.tur==='hurda'?' selected':'')+'>Hurda</option>'+
+        '<option value="capak"'+(f.tur==='capak'?' selected':'')+'>Çapak</option>'+
+        '<option value="granul"'+(f.tur==='granul'?' selected':'')+'>Granül</option>'+
+      '</select></div>'+
+      '<div class="field"><label>Cins</label><select id="sak_cins">'+
+        '<option value="">Tümü</option>'+
+        cinsSecenekleri.map(function(u){ return '<option value="'+escapeHtml(u)+'"'+(f.cins===u?' selected':'')+'>'+escapeHtml(u)+'</option>'; }).join('')+
+      '</select></div>'+
+      '<button class="btn ghost" id="sak_temizle">Filtreleri Temizle</button>'+
+    '</div>'+
+    (hepsiFiltresiz.length===0 ? '<div class="empty"><b>Henüz (parayla alınan) satın alma kaydı yok</b></div>' :
+      hepsi.length===0 ? '<div class="empty"><b>Bu filtrelerle eşleşen kayıt yok</b></div>' :
       '<div class="card"><table><thead><tr>'+
           '<th>Tarih</th><th>Tür</th><th>Cins</th><th>Miktar (kg)</th><th>Fire %</th><th>Fire Düşülmüş (kg)</th><th>Fiyat (TL/kg)</th><th>Nakliye (TL)</th><th>Toplam Maliyet</th><th>Maliyet (TL/kg)</th><th>Not</th><th>Giren</th><th></th>'+
         '</tr></thead><tbody>'+
@@ -2840,6 +3101,12 @@ function renderSatinAlmaKayitlar(c){
             '<td style="white-space:nowrap;">'+(canMutate()?('<button class="btn ghost small" data-icg-edit="'+g.id+'">Düzenle</button> <button class="btn danger small" data-icg-del="'+g.id+'">Sil</button>'):'')+'</td></tr>';
         }).join('')+
       '</tbody></table></div>');
+
+  document.getElementById('sak_baslangic').addEventListener('change', function(ev){ SA_KAYITLAR_FILTRE.baslangic = ev.target.value; renderSatinAlmaKayitlar(c); });
+  document.getElementById('sak_bitis').addEventListener('change', function(ev){ SA_KAYITLAR_FILTRE.bitis = ev.target.value; renderSatinAlmaKayitlar(c); });
+  document.getElementById('sak_tur').addEventListener('change', function(ev){ SA_KAYITLAR_FILTRE.tur = ev.target.value; SA_KAYITLAR_FILTRE.cins = ''; renderSatinAlmaKayitlar(c); });
+  document.getElementById('sak_cins').addEventListener('change', function(ev){ SA_KAYITLAR_FILTRE.cins = ev.target.value; renderSatinAlmaKayitlar(c); });
+  document.getElementById('sak_temizle').addEventListener('click', function(){ SA_KAYITLAR_FILTRE = { baslangic:'', bitis:'', tur:'', cins:'' }; renderSatinAlmaKayitlar(c); });
 
   Array.prototype.forEach.call(c.querySelectorAll('[data-sa-edit]'), function(b){
     b.addEventListener('click', function(){
@@ -2974,8 +3241,12 @@ function renderBidonUretimFormHTML(editEntry){
     '</optgroup>';
   }).join('');
   var hammaddeler = veri.hammaddeCinsleri || [];
+  var granulCinsleri = STATE.merkeziCinsler.urunler || [];
   var hammaddeOptions = '<option value="">— seçilmedi —</option>'+
-    hammaddeler.map(function(h){ return '<option value="'+escapeHtml(h.ad)+'"'+(isEdit&&editEntry.hammaddeCinsi===h.ad?' selected':'')+'>'+escapeHtml(h.ad)+'</option>'; }).join('');
+    hammaddeler.map(function(h){ return '<option value="'+escapeHtml(h.ad)+'"'+(isEdit&&editEntry.girdiTuru!=='granul'&&editEntry.hammaddeCinsi===h.ad?' selected':'')+'>'+escapeHtml(h.ad)+'</option>'; }).join('');
+  var granulOptions = '<option value="">— seçilmedi —</option>'+
+    granulCinsleri.map(function(p){ return '<option value="'+escapeHtml(p.ad)+'"'+(isEdit&&editEntry.girdiTuru==='granul'&&editEntry.hammaddeCinsi===p.ad?' selected':'')+'>'+escapeHtml(p.ad)+'</option>'; }).join('');
+  var girdiTuruBaslangic = (isEdit && editEntry.girdiTuru==='granul') ? 'granul' : 'hammadde';
   return '<div class="section-title" style="margin-top:0;">Bidon Üretimi</div>'+
     '<div class="card" style="max-width:560px;">'+
       (isEdit ? '<h3 style="margin-bottom:16px; text-transform:none; font-size:16px; color:var(--text);">Kaydı Düzenle</h3>' : '')+
@@ -2988,12 +3259,17 @@ function renderBidonUretimFormHTML(editEntry){
         '<div class="field"><label>Üretilen Adet</label><input type="number" id="bu_adet" min="0" step="1" value="'+(isEdit?editEntry.kg:'')+'" placeholder="örn. 5000"></div>'+
         '<div class="field"><label>Fire Adedi (adet)</label><input type="number" id="bu_fire" min="0" step="1" value="'+(isEdit?(editEntry.fireAdedi||0):0)+'" placeholder="örn. 50"></div>'+
       '</div>'+
-      (hammaddeler.length===0 ?
-        '<div class="callout warn" style="margin-bottom:13px;">Henüz tanımlı hammadde cinsi yok — bu kayıt hangi hammaddeyi tükettiğinizi kaydedemeyecek. <a id="bu_go_param_hm" style="color:var(--amber); cursor:pointer;">Parametreler</a>\'den ekleyebilirsiniz (opsiyonel).</div>'
+      (hammaddeler.length===0 && granulCinsleri.length===0 ?
+        '<div class="callout warn" style="margin-bottom:13px;">Henüz tanımlı hammadde/Granül cinsi yok — bu kayıt hangi girdinin tükendiğini kaydedemeyecek. <a id="bu_go_param_hm" style="color:var(--amber); cursor:pointer;">Parametreler</a>\'den ekleyebilirsiniz (opsiyonel).</div>'
         :
-        '<div class="field"><label>Kullanılan Hammadde Cinsi</label><select id="bu_hammadde">'+hammaddeOptions+'</select></div>')+
+        '<div class="field"><label>Girdi Kaynağı</label><select id="bu_girdituru">'+
+          '<option value="hammadde"'+(girdiTuruBaslangic==='hammadde'?' selected':'')+'>Hammadde (bu birimin kendi satın aldığı)</option>'+
+          '<option value="granul"'+(girdiTuruBaslangic==='granul'?' selected':'')+'>Granül (Genel Fabrika\'nın paylaşımlı Granül stoğu)</option>'+
+        '</select></div>'+
+        '<div class="field" id="bu_hammadde_alani" style="display:'+(girdiTuruBaslangic==='hammadde'?'block':'none')+';"><label>Kullanılan Hammadde Cinsi</label><select id="bu_hammadde">'+hammaddeOptions+'</select></div>'+
+        '<div class="field" id="bu_granul_alani" style="display:'+(girdiTuruBaslangic==='granul'?'block':'none')+';"><label>Kullanılan Granül Cinsi</label><select id="bu_granul">'+granulOptions+'</select></div>')+
       '<div class="field"><label>Kullanılan Miktar (kg) — otomatik hesaplanır</label><input type="number" id="bu_kg" step="0.01" disabled style="opacity:.75;"></div>'+
-      '<div class="note" style="margin:-6px 0 13px;">Kullanılan miktar = (Üretilen Adet + Fire Adedi) × Ürün Gramajı — bidon tipinin Parametreler sekmesinde tanımlı gramajına göre otomatik hesaplanır, elle değiştirilemez. Hammadde cinsi seçilirse, bu miktar o hammaddenin stoğundan düşer.</div>'+
+      '<div class="note" style="margin:-6px 0 13px;">Kullanılan miktar = (Üretilen Adet + Fire Adedi) × Ürün Gramajı — bidon tipinin Parametreler sekmesinde tanımlı gramajına göre otomatik hesaplanır, elle değiştirilemez. Girdi seçilirse, bu miktar seçilen kaynağın (hammadde ya da Genel Fabrika Granül) stoğundan düşer.</div>'+
       '<div class="field"><label>Not (opsiyonel)</label><textarea id="bu_not" rows="2">'+(isEdit?escapeHtml(editEntry.notlar||''):'')+'</textarea></div>'+
       '<button class="btn" id="bu_save">'+(isEdit?'Kaydı Güncelle':'Kaydı Kaydet')+'</button>'+
       (isEdit ? ' <button class="btn ghost" id="bu_cancel">Vazgeç</button>' : '')+
@@ -3011,6 +3287,10 @@ function initBidonUretimForm(editEntry){
   var kgInput = document.getElementById('bu_kg');
   var vardiyaSel = document.getElementById('bu_vardiya');
   var hammaddeSel = document.getElementById('bu_hammadde');
+  var granulSel = document.getElementById('bu_granul');
+  var girdiTuruSel = document.getElementById('bu_girdituru');
+  var hammaddeAlani = document.getElementById('bu_hammadde_alani');
+  var granulAlani = document.getElementById('bu_granul_alani');
   if(!urunSel || !adetInput) return; // ürün listesi boşsa form hiç basılmamış olabilir
 
   var goParamHmLink = document.getElementById('bu_go_param_hm');
@@ -3018,6 +3298,14 @@ function initBidonUretimForm(editEntry){
 
   if(isEdit && editEntry.urun) urunSel.value = editEntry.urun;
   if(isEdit && editEntry.vardiya) vardiyaSel.value = editEntry.vardiya;
+
+  if(girdiTuruSel){
+    girdiTuruSel.addEventListener('change', function(){
+      var granulMi = girdiTuruSel.value === 'granul';
+      if(hammaddeAlani) hammaddeAlani.style.display = granulMi ? 'none' : 'block';
+      if(granulAlani) granulAlani.style.display = granulMi ? 'block' : 'none';
+    });
+  }
 
   function gramajBul(){
     var opt = urunSel.options[urunSel.selectedIndex];
@@ -3047,9 +3335,10 @@ function initBidonUretimForm(editEntry){
     var fire = Number(fireInput.value)||0;
     var kullanilan = Number(kgInput.value)||0;
     var notlar = document.getElementById('bu_not').value.trim();
-    var hammaddeCinsi = hammaddeSel ? hammaddeSel.value : '';
+    var girdiTuru = girdiTuruSel ? girdiTuruSel.value : 'hammadde';
+    var girdiAdi = girdiTuru==='granul' ? (granulSel?granulSel.value:'') : (hammaddeSel?hammaddeSel.value:'');
     if(!tarih || !urun || !adet){ alert('Lütfen tarih, bidon tipi ve üretilen adet alanlarını doldurun.'); return; }
-    var payload = {tarih:tarih, urun:urun, vardiya:vardiya, kg:adet, fireAdedi:fire, kullanilanCapak:kullanilan, capakCinsi:'', hammaddeCinsi:hammaddeCinsi, notlar:notlar};
+    var payload = {tarih:tarih, urun:urun, vardiya:vardiya, kg:adet, fireAdedi:fire, kullanilanCapak:kullanilan, capakCinsi:'', hammaddeCinsi:girdiAdi, girdiTuru:girdiTuru, notlar:notlar};
     var aciklama = (isEdit?'Bidon üretim kaydı güncelleme: ':'Yeni bidon üretim kaydı: ')+urun+', '+fmt(adet)+' adet ('+tarihGoster(tarih)+')';
     var fonksiyonAdi = isEdit ? 'updateEntry' : 'addEntry';
     var argListesi = isEdit ? [STATE.aktifBirimId, editEntry.id, payload] : [STATE.aktifBirimId, payload];
@@ -3989,7 +4278,7 @@ function renderAylikContentCapak(month){
           '<div class="field"><label>Sulu Kırma Hattı Gündüz Maaşı (TL)</label><input type="number" step="100" id="kap_sk_gunduz" value="'+(kapanis?kapanis.suluKirmaGunduzMaas:0)+'"></div>'+
           '<div class="field"><label>Sulu Kırma Hattı Gece Maaşı (TL)</label><input type="number" step="100" id="kap_sk_gece" value="'+(kapanis?kapanis.suluKirmaGeceMaas:0)+'"></div>'+
         '</div>'+
-        '<button type="button" class="btn ghost small" id="kapanis_maas_senkron" style="margin:-4px 0 10px;">↻ Personel sekmesindeki güncel toplamlarla doldur</button>'+
+        '<div class="callout" style="margin-bottom:10px;">Bu personel Granül Birimi ile ORTAK (aynı kişiler) ise, yukarıdaki 2 alanı <b>0 bırakın</b> — o kişilerin maliyeti, Granül Birimi\'nin Aylık Kapanış\'ındaki "Ortak İşçilik" alanından otomatik olarak buraya da yansır (kg oranına göre). Buraya AYRICA bir tutar girerseniz, aynı maaş ÇİFT SAYILIR.</div>'+
         '<div class="note" style="margin-bottom:10px;">Maaş değerleri, "Bu Ayı Kaydet"e bastığınız andaki tutarda SABİT kalır (geçmiş ayların maliyeti sonradan değişmesin diye).</div>'+
         '<button class="btn" id="kapanis_kaydet">Bu Ayı Kaydet</button> '+
         '<button class="btn ghost" id="kapanis_vazgec">Vazgeç</button>'+
@@ -4060,15 +4349,6 @@ function renderAylikContentCapak(month){
   });
   var vazgecBtn = document.getElementById('kapanis_vazgec');
   if(vazgecBtn) vazgecBtn.addEventListener('click', function(){ document.getElementById('kapanis_form').style.display = 'none'; });
-  (document.getElementById('kapanis_maas_senkron')||{addEventListener:function(){}}).addEventListener('click', function(){
-    // Personel sekmesindeki GÜNCEL toplamları alanlara doldurur (henüz kaydetmez — "Bu Ayı
-    // Kaydet"e basılınca kalıcı olur). Değerler kalıcı bir kere kaydedilen ayda otomatik
-    // değişmez (geçmiş ayların maliyeti sonradan sessizce değişmesin diye), bu yüzden personel
-    // değiştiyse bu ayı güncellemek isteyen kullanıcı bilinçli olarak bu butona basmalı.
-    document.getElementById('kap_sk_gunduz').value = STATE.birimVeri.settings.suluKirmaGunduzMaas;
-    document.getElementById('kap_sk_gece').value = STATE.birimVeri.settings.suluKirmaGeceMaas;
-    showToast('Personel toplamlarıyla dolduruldu — kalıcı olması için "Bu Ayı Kaydet"e basmayı unutmayın.');
-  });
   (document.getElementById('kapanis_kaydet')||{addEventListener:function(){}}).addEventListener('click', function(){
     var obj = {
       elektrikFiyati: Number((document.getElementById('kap_elek')||{value:''}).value),
@@ -4145,6 +4425,7 @@ function renderAylikContent(month){
             '<div><div class="note">Aylık Çalışma Süresi</div><b class="mono">'+fmt(kapanis.aylikCalismaSuresi)+' saat</b></div>'+
             '<div><div class="note">Agromel Gündüz/Gece</div><b class="mono">'+fmt(kapanis.agromelGunduzMaas)+' / '+fmt(kapanis.agromelGeceMaas)+' TL</b></div>'+
             '<div><div class="note">Granül Gündüz/Gece</div><b class="mono">'+fmt(kapanis.granulGunduzMaas)+' / '+fmt(kapanis.granulGeceMaas)+' TL</b></div>'+
+            (Number(kapanis.ortakIscilikAylikMaas) ? '<div><div class="note">Ortak İşçilik (Çapak+Granül)</div><b class="mono">'+fmt(kapanis.ortakIscilikAylikMaas)+' TL/ay</b></div>' : '')+
           '</div>'+
           '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Düzenle</button>'
         : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için maliyet parametreleri henüz girilmedi. Üretim kayıtları normal girilebilir; maliyet hesabı bu parametreler girilince otomatik oluşur.</div>'+
@@ -4163,7 +4444,10 @@ function renderAylikContent(month){
           '<div class="field"><label>Granül Gündüz Maaşı (TL)</label><input type="number" step="100" id="kap_gran_gunduz" value="'+(kapanis?kapanis.granulGunduzMaas:0)+'"></div>'+
           '<div class="field"><label>Granül Gece Maaşı (TL)</label><input type="number" step="100" id="kap_gran_gece" value="'+(kapanis?kapanis.granulGeceMaas:0)+'"></div>'+
         '</div>'+
-        '<button type="button" class="btn ghost small" id="kapanis_maas_senkron" style="margin:-4px 0 10px;">↻ Personel sekmesindeki güncel toplamlarla doldur</button>'+
+        '<div class="note" style="margin:-4px 0 13px;">Agromel/Granül maaşları (yukarıdaki 4 alan), Granül Birimi\'nin KENDİ İÇİNDEKİ agromel yapılan/yapılmayan üretim ayrımı içindir — bunları elle girin. Çapak Üretim Birimi ile PAYLAŞILAN personel için aşağıdaki "Ortak İşçilik" alanını kullanın.</div>'+
+        '<div class="field"><label>Ortak İşçilik — Çapak Üretim Birimi ile PAYLAŞILAN personelin bu AYKİ toplam maaş gideri (TL)</label><input type="number" step="100" id="kap_ortak_iscilik" value="'+(kapanis?(kapanis.ortakIscilikAylikMaas||0):0)+'"></div>'+
+        '<button type="button" class="btn ghost small" id="kap_ortak_senkron" style="margin:-4px 0 10px;">↻ Genel Fabrika &gt; Personel\'deki "Ortak" listesinin güncel toplamıyla doldur</button>'+
+        '<div class="note" style="margin:-6px 0 13px;">Bu alan, Genel Fabrika &gt; Personel ekranında "Çapak Üretim Birimi ve Granül Birimi (Ortak)" olarak işaretlenmiş kişilerin toplam aylık maaşıdır — yukarıdaki butonla otomatik doldurabilir ya da elle girebilirsiniz. Ay sonunda bu tutar, o ayki Granül ve Çapak Üretim kg üretim ORANINA göre otomatik olarak iki birim arasında bölüştürülür (bkz. Bilanço). Ortak personel yoksa 0 bırakın.</div>'+
         '<div class="note" style="margin-bottom:10px;">Maaş değerleri, "Bu Ayı Kaydet"e bastığınız andaki tutarda SABİT kalır (geçmiş ayların maliyeti sonradan değişmesin diye).</div>'+
         '<button class="btn" id="kapanis_kaydet">Bu Ayı Kaydet</button> '+
         '<button class="btn ghost" id="kapanis_vazgec">Vazgeç</button>'+
@@ -4231,16 +4515,16 @@ function renderAylikContent(month){
   });
   var vazgecBtn = document.getElementById('kapanis_vazgec');
   if(vazgecBtn) vazgecBtn.addEventListener('click', function(){ document.getElementById('kapanis_form').style.display = 'none'; });
-  (document.getElementById('kapanis_maas_senkron')||{addEventListener:function(){}}).addEventListener('click', function(){
-    // Personel sekmesindeki GÜNCEL toplamları alanlara doldurur (henüz kaydetmez — "Bu Ayı
-    // Kaydet"e basılınca kalıcı olur). Değerler kalıcı bir kere kaydedilen ayda otomatik
-    // değişmez (geçmiş ayların maliyeti sonradan sessizce değişmesin diye), bu yüzden personel
-    // değiştiyse bu ayı güncellemek isteyen kullanıcı bilinçli olarak bu butona basmalı.
-    document.getElementById('kap_agro_gunduz').value = STATE.birimVeri.settings.agromelGunduzMaas;
-    document.getElementById('kap_agro_gece').value = STATE.birimVeri.settings.agromelGeceMaas;
-    document.getElementById('kap_gran_gunduz').value = STATE.birimVeri.settings.granulGunduzMaas;
-    document.getElementById('kap_gran_gece').value = STATE.birimVeri.settings.granulGeceMaas;
-    showToast('Personel toplamlarıyla dolduruldu — kalıcı olması için "Bu Ayı Kaydet"e basmayı unutmayın.');
+  (document.getElementById('kap_ortak_senkron')||{addEventListener:function(){}}).addEventListener('click', function(){
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Yükleniyor…';
+    window.api.getPersonelListesi().then(function(personelListesi){
+      var toplam = (personelListesi||[]).filter(function(p){ return p.birimHedefi === 'capak-granul-ortak'; })
+        .reduce(function(s,p){ return s+(Number(p.maas)||0); }, 0);
+      document.getElementById('kap_ortak_iscilik').value = toplam;
+      showToast('Ortak personel toplamıyla dolduruldu ('+fmt(toplam)+' TL) — kalıcı olması için "Bu Ayı Kaydet"e basmayı unutmayın.');
+      btn.disabled = false; btn.textContent = '↻ Genel Fabrika > Personel\'deki "Ortak" listesinin güncel toplamıyla doldur';
+    }).catch(function(err){ alert(err.message); btn.disabled = false; btn.textContent = '↻ Genel Fabrika > Personel\'deki "Ortak" listesinin güncel toplamıyla doldur'; });
   });
   (document.getElementById('kapanis_kaydet')||{addEventListener:function(){}}).addEventListener('click', function(){
     var obj = {
@@ -4249,7 +4533,8 @@ function renderAylikContent(month){
       agromelGunduzMaas: Number((document.getElementById('kap_agro_gunduz')||{value:''}).value),
       agromelGeceMaas: Number((document.getElementById('kap_agro_gece')||{value:''}).value),
       granulGunduzMaas: Number((document.getElementById('kap_gran_gunduz')||{value:''}).value),
-      granulGeceMaas: Number((document.getElementById('kap_gran_gece')||{value:''}).value)
+      granulGeceMaas: Number((document.getElementById('kap_gran_gece')||{value:''}).value),
+      ortakIscilikAylikMaas: Number((document.getElementById('kap_ortak_iscilik')||{value:0}).value)
     };
     window.api.saveAylikKapanis(STATE.aktifBirimId, month, obj).then(function(kapanislar){
       STATE.birimVeri.aylikKapanislar = kapanislar;
@@ -4336,222 +4621,49 @@ function birimEtiket(birim){
 function vardiyaEtiket(vardiya){ return vardiya === 'gece' ? 'Gece' : 'Gündüz'; }
 
 function renderPersonel(c){
-  var unvanOptions = STATE.birimVeri.unvanlar.map(function(u){ return '<option value="'+escapeHtml(u)+'">'+escapeHtml(u)+'</option>'; }).join('');
-  var isGranulBirimi = STATE.aktifBirimId === 'granul-birimi';
-  var isCapakBirimi = STATE.aktifBirimId === 'capak-uretim-birimi';
-  // Sadece Granül Birimi'nde Agromel/Granül ayrımı vardır. Diğer TÜM birimler (Çapak Üretim
-  // Birimi dahil, Genel Fabrika dahil, dinamik olarak eklenen her yeni birim dahil) TEK bir
-  // kategori kullanır — o birimin kendisi. Çapak Üretim Birimi'nin özel adı ("Sulu Kırma Hattı")
-  // geriye dönük uyumluluk için korunuyor; diğerlerinde birimin kendi adı kullanılır.
-  var isTekKategori = !isGranulBirimi;
-  var tekBirimDegeri = isCapakBirimi ? 'sulu_kirma' : 'tek';
-  var tekBirimEtiketi = isCapakBirimi ? 'Sulu Kırma Hattı' : aktifBirimAdi();
+  c.innerHTML = '<div class="note">Yükleniyor…</div>';
+  var buNesil = RENDER_NESLI;
+  window.api.getPersonelListesi().then(function(personelListesi){
+    if(buNesil !== RENDER_NESLI) return;
+    var hedefFiltre = merkeziBirimMi(STATE.aktifBirimId) ? 'capak-granul-ortak' : STATE.aktifBirimId;
+    var buBirimPersonel = (personelListesi||[]).filter(function(p){ return p.birimHedefi === hedefFiltre; });
+    var gunduzToplam = buBirimPersonel.filter(function(p){ return p.vardiya!=='gece'; }).reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
+    var geceToplam = buBirimPersonel.filter(function(p){ return p.vardiya==='gece'; }).reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
 
-  // vardiya bazında toplamlar.
-  var toplamlar = { agromel_gunduz:0, agromel_gece:0, granul_gunduz:0, granul_gece:0, sulu_kirma_gunduz:0, sulu_kirma_gece:0, tek_gunduz:0, tek_gece:0 };
-  STATE.birimVeri.personel.forEach(function(p){
-    var key = p.birim + '_' + p.vardiya;
-    if(toplamlar[key] !== undefined) toplamlar[key] += Number(p.maas)||0;
-  });
-  var tekGunduz = isCapakBirimi ? toplamlar.sulu_kirma_gunduz : toplamlar.tek_gunduz;
-  var tekGece = isCapakBirimi ? toplamlar.sulu_kirma_gece : toplamlar.tek_gece;
-  var gunduzToplam = isTekKategori ? tekGunduz : (toplamlar.agromel_gunduz + toplamlar.granul_gunduz);
-  var geceToplam = isTekKategori ? tekGece : (toplamlar.agromel_gece + toplamlar.granul_gece);
+    c.innerHTML =
+      '<div class="callout">Personel bilgileri artık <b>Genel Fabrika &gt; Personel</b> ekranından merkezi olarak yönetiliyor'+(merkeziBirimMi(STATE.aktifBirimId)?' — Çapak Üretim Birimi ile Granül Birimi\'ndeki personel ORTAK bir listedir (aynı kişiler burada çalışır, maliyetleri kg üretim oranına göre iki birim arasında otomatik bölüştürülür)':'')+'. Buradaki liste sadece görüntüleme amaçlıdır; ekleme/düzenleme/silme için Genel Fabrika &gt; Personel ekranına gidin.</div>'+
+      '<div class="grid grid-2" style="margin-top:14px;">'+
+        '<div class="card"><h3 style="color:var(--amber);">Gündüz Vardiyası Toplam Maaş</h3><div class="stat">'+fmt(gunduzToplam)+'<small>TL</small></div></div>'+
+        '<div class="card"><h3 style="color:#8fa3e0;">Gece Vardiyası Toplam Maaş</h3><div class="stat">'+fmt(geceToplam)+'<small>TL</small></div></div>'+
+      '</div>'+
+      '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
+        '<span>Personel Listesi</span>'+(buBirimPersonel.length>0?'<button class="btn ghost small" id="personel_pdf_btn">PDF Olarak Dışa Aktar</button>':'')+
+      '</div>'+
+      (buBirimPersonel.length===0 ? '<div class="empty"><b>Bu birimde henüz personel yok</b>Genel Fabrika &gt; Personel\'den ekleyebilirsiniz.</div>' :
+        '<div class="card"><table><thead><tr><th>Ad Soyad</th><th>Ünvan</th><th>Vardiya</th><th>Maaş (TL)</th></tr></thead><tbody>'+
+          buBirimPersonel.slice().sort(function(a,b){ var au=a.unvan==='Vardiya Amiri'?0:1, bu=b.unvan==='Vardiya Amiri'?0:1; return au-bu; }).map(function(p){
+            return '<tr><td class="txt">'+escapeHtml(p.ad)+'</td><td class="txt">'+escapeHtml(p.unvan||'')+'</td>'+
+              '<td class="txt">'+(p.vardiya==='gece'?'Gece':'Gündüz')+'</td><td>'+fmt(p.maas)+'</td></tr>';
+          }).join('')+
+        '</tbody></table></div>');
 
-  c.innerHTML =
-    '<div class="grid grid-2">'+
-      '<div class="card"><h3 style="color:var(--amber);">Gündüz Vardiyası Toplam Maaş</h3>'+
-        (isTekKategori ?
-          '<div class="stat" style="font-size:18px; margin-bottom:10px;">'+escapeHtml(tekBirimEtiketi)+': <b class="mono">'+fmt(tekGunduz)+' TL</b></div>'
-          :
-          '<div class="stat" style="font-size:18px; margin-bottom:6px;">Agromel: <b class="mono">'+fmt(toplamlar.agromel_gunduz)+' TL</b></div>'+
-          '<div class="stat" style="font-size:18px; margin-bottom:10px;">Granül: <b class="mono">'+fmt(toplamlar.granul_gunduz)+' TL</b></div>')+
-        '<div class="note">Toplam: <b class="mono" style="color:var(--text);">'+fmt(gunduzToplam)+' TL</b></div>'+
-      '</div>'+
-      '<div class="card"><h3 style="color:#8fa3e0;">Gece Vardiyası Toplam Maaş</h3>'+
-        (isTekKategori ?
-          '<div class="stat" style="font-size:18px; margin-bottom:10px;">'+escapeHtml(tekBirimEtiketi)+': <b class="mono">'+fmt(tekGece)+' TL</b></div>'
-          :
-          '<div class="stat" style="font-size:18px; margin-bottom:6px;">Agromel: <b class="mono">'+fmt(toplamlar.agromel_gece)+' TL</b></div>'+
-          '<div class="stat" style="font-size:18px; margin-bottom:10px;">Granül: <b class="mono">'+fmt(toplamlar.granul_gece)+' TL</b></div>')+
-        '<div class="note">Toplam: <b class="mono" style="color:var(--text);">'+fmt(geceToplam)+' TL</b></div>'+
-      '</div>'+
-    '</div>'+
-    '<div class="note" style="margin:10px 0 20px;">Bu toplamlar, ay sonunda <b>Aylık Rapor</b> sekmesinde maliyet parametrelerini girerken hazır öneri olarak kullanılır.</div>'+
-    '<div class="section-title">Yeni Personel Ekle</div>'+
-    '<div class="card" style="max-width:640px;">'+
-      '<div class="row">'+
-        '<div class="field"><label>Ad Soyad</label><input type="text" id="per_ad" placeholder="Adı Soyadı"></div>'+
-        '<div class="field"><label>Ünvan</label><select id="per_unvan">'+unvanOptions+'</select></div>'+
-      '</div>'+
-      '<div class="row">'+
-        (isTekKategori ?
-          '<div class="field"><label>Birim</label><input type="text" value="'+escapeHtml(tekBirimEtiketi)+'" disabled><input type="hidden" id="per_birim" value="'+tekBirimDegeri+'"></div>'
-          :
-          '<div class="field"><label>Birim</label><select id="per_birim">'+
-            '<option value="agromel">Agromel</option><option value="granul">Granül</option>'+
-          '</select></div>')+
-        '<div class="field"><label>Vardiya</label><select id="per_vardiya">'+
-          '<option value="gunduz">Gündüz</option><option value="gece">Gece</option>'+
-        '</select></div>'+
-      '</div>'+
-      '<div class="field"><label>Maaş (TL)</label><input type="number" step="100" id="per_maas" placeholder="örn. 40000"></div>'+
-      '<button class="btn" id="per_ekle">+ Personel Ekle</button>'+
-      '<div class="note" style="margin-top:14px;">Yeni bir ünvan eklemek isterseniz:</div>'+
-      '<div class="row" style="margin-top:6px;">'+
-        '<div class="field"><input type="text" id="yeni_unvan_ad" placeholder="Yeni ünvan adı (örn. Usta Başı)"></div>'+
-        '<button class="btn ghost" id="unvan_ekle" style="flex:0 0 auto;">+ Ünvan Ekle</button>'+
-      '</div>'+
-    '</div>'+
-    '<div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">'+
-      '<span>Personel Listesi</span><button class="btn ghost small" id="personel_pdf_btn">PDF Olarak Dışa Aktar</button>'+
-    '</div>'+
-    '<div class="grid grid-2">'+
-      '<div>'+
-        '<div class="section-title" style="margin-top:0; font-size:13px; color:var(--amber); text-transform:uppercase; letter-spacing:.05em;">Gündüz Vardiyası (Vardiya Amiri en üstte)</div>'+
-        '<div class="card"><div id="personel_list_gunduz"></div></div>'+
-      '</div>'+
-      '<div>'+
-        '<div class="section-title" style="margin-top:0; font-size:13px; color:#8fa3e0; text-transform:uppercase; letter-spacing:.05em;">Gece Vardiyası (Vardiya Amiri en üstte)</div>'+
-        '<div class="card"><div id="personel_list_gece"></div></div>'+
-      '</div>'+
-    '</div>';
-
-  (document.getElementById('personel_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
-    pdfDisaAktarPenceresiAc({
-      baslik: aktifBirimAdi()+' — Personel Listesi',
-      sutunlar: [
-        {key:'ad', label:'Ad Soyad'}, {key:'unvan', label:'Ünvan'}, {key:'birim', label:'Birim'},
-        {key:'vardiya', label:'Vardiya'}, {key:'maas', label:'Maaş (TL)'}
-      ],
-      kayitlarGetir: function(){ return STATE.birimVeri.personel; },
-      satirDegeri: function(p, key){
-        if(key === 'birim') return birimEtiket(p.birim);
-        if(key === 'vardiya') return p.vardiya==='gece' ? 'Gece' : 'Gündüz';
-        if(key === 'maas') return fmt(p.maas);
-        return p[key] || '';
-      },
-      ozetSatirlari: function(kayitlar){
-        var toplamMaas = kayitlar.reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
-        return [{etiket:'Toplam Personel', deger:String(kayitlar.length)}, {etiket:'Toplam Maaş', deger:fmt(toplamMaas)+' TL'}];
-      }
-    });
-  });
-
-  function personelTablosu(list, containerId){
-    var box = document.getElementById(containerId);
-    if(list.length === 0){ box.innerHTML = '<div class="empty"><b>Kayıt yok</b></div>'; return; }
-    var st = TABLO_SIRALAMA_STATE[containerId];
-    var sirali = st
-      ? siraliListeGetir(list, containerId, function(p, kolon){
-          if(kolon==='maas') return Number(p.maas)||0;
-          if(kolon==='birim') return birimEtiket(p.birim);
-          if(kolon==='vardiya') return p.vardiya==='gece'?'Gece':'Gündüz';
-          return p[kolon]||'';
-        })
-      : list.slice().sort(function(a,b){
-          var aAmir = a.unvan === 'Vardiya Amiri' ? 0 : 1;
-          var bAmir = b.unvan === 'Vardiya Amiri' ? 0 : 1;
-          return aAmir - bAmir;
-        });
-    box.innerHTML = '<table><thead><tr>'+thSirala(containerId,'ad','Ad Soyad')+thSirala(containerId,'unvan','Ünvan')+thSirala(containerId,'birim','Birim')+thSirala(containerId,'vardiya','Vardiya')+thSirala(containerId,'maas','Maaş (TL)')+'<th></th></tr></thead><tbody>'+
-      sirali.map(function(p){
-        return '<tr data-per-row="'+p.id+'">'+
-          '<td class="txt">'+escapeHtml(p.ad)+'</td>'+
-          '<td class="txt"><span class="tag '+(p.unvan==='Vardiya Amiri'?'gunduz':'gray')+'">'+escapeHtml(p.unvan)+'</span></td>'+
-          '<td class="txt"><span class="tag '+(p.birim==='agromel'?'renkli':'seffaf')+'">'+birimEtiket(p.birim)+'</span></td>'+
-          '<td class="txt">'+(p.vardiya==='gece'?'Gece':'Gündüz')+'</td>'+
-          '<td>'+fmt(p.maas)+'</td>'+
-          '<td>'+(canMutate()?('<button class="btn ghost small" data-per-duzenle="'+p.id+'">Düzenle</button> <button class="btn danger small" data-per-del="'+p.id+'">Sil</button>'):'')+'</td>'+
-        '</tr>';
-      }).join('')+
-    '</tbody></table>';
-    Array.prototype.forEach.call(box.querySelectorAll('[data-per-duzenle]'), function(b){
-      b.addEventListener('click', function(){
-        var id = b.dataset.perDuzenle;
-        var p = STATE.birimVeri.personel.find(function(x){ return x.id === id; });
-        if(!p) return;
-        var tr = box.querySelector('tr[data-per-row="'+id+'"]');
-        var unvanOptionsInline = STATE.birimVeri.unvanlar.map(function(u){ return '<option value="'+escapeHtml(u)+'"'+(u===p.unvan?' selected':'')+'>'+escapeHtml(u)+'</option>'; }).join('');
-        tr.innerHTML =
-          '<td><input type="text" class="per-e-ad" value="'+escapeHtml(p.ad)+'" style="width:100%; min-width:110px;"></td>'+
-          '<td><select class="per-e-unvan">'+unvanOptionsInline+'</select></td>'+
-          '<td>'+(isTekKategori
-            ? '<span class="tag seffaf">'+escapeHtml(tekBirimEtiketi)+'</span><input type="hidden" class="per-e-birim-tek" value="'+tekBirimDegeri+'">'
-            : '<select class="per-e-birim"><option value="agromel"'+(p.birim==='agromel'?' selected':'')+'>Agromel</option><option value="granul"'+(p.birim!=='agromel'?' selected':'')+'>Granül</option></select>')+
-          '</td>'+
-          '<td><select class="per-e-vardiya"><option value="gunduz"'+(p.vardiya!=='gece'?' selected':'')+'>Gündüz</option><option value="gece"'+(p.vardiya==='gece'?' selected':'')+'>Gece</option></select></td>'+
-          '<td><input type="number" class="per-e-maas" value="'+p.maas+'" step="100" style="width:95px;"></td>'+
-          '<td style="white-space:nowrap;"><button class="btn small" data-per-kaydet="'+id+'">Kaydet</button> <button class="btn ghost small" data-per-vazgec="1">Vazgeç</button></td>';
-        tr.querySelector('[data-per-kaydet]').addEventListener('click', function(){
-          var kaydetBtn = this;
-          var patch = {
-            ad: tr.querySelector('.per-e-ad').value.trim(),
-            unvan: tr.querySelector('.per-e-unvan').value,
-            vardiya: tr.querySelector('.per-e-vardiya').value,
-            maas: Number(tr.querySelector('.per-e-maas').value) || 0
-          };
-          if(!isTekKategori) patch.birim = tr.querySelector('.per-e-birim').value;
-          if(!patch.ad || !patch.maas){ alert('Lütfen ad soyad ve maaş alanlarını doldurun.'); return; }
-          kaydetBtn.disabled = true; kaydetBtn.textContent = 'Kaydediliyor…';
-          var aciklama = 'Personel güncelleme: '+patch.ad+' ('+fmt(patch.maas)+' TL)';
-          mutasyonCagir('updatePersonel', [STATE.aktifBirimId, id, patch], aciklama, aktifBirimAdi(), function(res, kuyruga){
-            if(kuyruga){ kaydetBtn.disabled=false; kaydetBtn.textContent='Kaydet'; return; }
-            STATE.birimVeri.personel = res.personel; STATE.birimVeri.settings = res.settings;
-            showToast('Personel güncellendi.');
-            renderList();
-          }, function(err){ alert(err.message); kaydetBtn.disabled=false; kaydetBtn.textContent='Kaydet'; });
-        });
-        tr.querySelector('[data-per-vazgec]').addEventListener('click', function(){ renderList(); });
+    (document.getElementById('personel_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
+      pdfDisaAktarPenceresiAc({
+        baslik: aktifBirimAdi()+' — Personel Listesi',
+        sutunlar: [{key:'ad',label:'Ad Soyad'},{key:'unvan',label:'Ünvan'},{key:'vardiya',label:'Vardiya'},{key:'maas',label:'Maaş (TL)'}],
+        kayitlarGetir: function(){ return buBirimPersonel; },
+        satirDegeri: function(p, key){
+          if(key==='vardiya') return p.vardiya==='gece'?'Gece':'Gündüz';
+          if(key==='maas') return fmt(p.maas);
+          return p[key]||'';
+        },
+        ozetSatirlari: function(kayitlar){
+          var toplamMaas = kayitlar.reduce(function(s,p){ return s+(Number(p.maas)||0); },0);
+          return [{etiket:'Toplam Personel', deger:String(kayitlar.length)}, {etiket:'Toplam Maaş', deger:fmt(toplamMaas)+' TL'}];
+        }
       });
     });
-    Array.prototype.forEach.call(box.querySelectorAll('[data-per-del]'), function(b){
-      b.addEventListener('click', function(){
-        var kisi = STATE.birimVeri.personel.find(function(x){ return x.id === b.dataset.perDel; });
-        showConfirm('Bu personeli silmek istediğinize emin misiniz?', 'Sil', function(){
-          var aciklama = 'Personel silme: '+(kisi?kisi.ad:'');
-          mutasyonCagir('deletePersonel', [STATE.aktifBirimId, b.dataset.perDel], aciklama, aktifBirimAdi(), function(res, kuyruga){
-            if(kuyruga) return;
-            STATE.birimVeri.personel = res.personel; STATE.birimVeri.settings = res.settings;
-            renderList();
-          });
-        });
-      });
-    });
-    tabloSiralamaBagla(box, renderList);
-  }
-
-  function renderList(){
-    var gunduz = STATE.birimVeri.personel.filter(function(p){ return p.vardiya === 'gunduz'; });
-    var gece = STATE.birimVeri.personel.filter(function(p){ return p.vardiya === 'gece'; });
-    personelTablosu(gunduz, 'personel_list_gunduz');
-    personelTablosu(gece, 'personel_list_gece');
-  }
-  renderList();
-
-  (document.getElementById('per_ekle')||{addEventListener:function(){}}).addEventListener('click', function(){
-    var ad = (document.getElementById('per_ad')||{value:''}).value.trim();
-    var unvan = (document.getElementById('per_unvan')||{value:''}).value;
-    var birim = (document.getElementById('per_birim')||{value:''}).value;
-    var vardiya = (document.getElementById('per_vardiya')||{value:''}).value;
-    var maas = Number((document.getElementById('per_maas')||{value:''}).value);
-    if(!ad || !unvan || !maas){ alert('Lütfen ad, ünvan ve maaş alanlarını doldurun.'); return; }
-    var aciklama = 'Yeni personel: '+ad+' ('+unvan+', '+fmt(maas)+' TL)';
-    mutasyonCagir('addPersonel', [STATE.aktifBirimId, {ad:ad, unvan:unvan, birim:birim, vardiya:vardiya, maas:maas}], aciklama, aktifBirimAdi(), function(res, kuyruga){
-      if(kuyruga) return;
-      STATE.birimVeri.personel = res.personel; STATE.birimVeri.settings = res.settings;
-      renderPersonel(c);
-    });
-  });
-
-  (document.getElementById('unvan_ekle')||{addEventListener:function(){}}).addEventListener('click', function(){
-    var ad = (document.getElementById('yeni_unvan_ad')||{value:''}).value.trim();
-    if(!ad){ alert('Lütfen ünvan adı girin.'); return; }
-    window.api.addUnvan(STATE.aktifBirimId, ad).then(function(u){
-      STATE.birimVeri.unvanlar = u;
-      renderPersonel(c);
-    }).catch(function(err){ alert(err.message); });
-  });
+  }).catch(function(err){ c.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>'; });
 }
 
 // ============================================================
@@ -4605,6 +4717,93 @@ function hammaddeOrtalamaFiyat(veri, hammaddeCinsi){
   return toplamTutar / toplamKg;
 }
 
+// Bir granül cinsinin, Granül Birimi'nin BUGÜNE KADAR ürettiği (aylık kapanışı girilmiş günler
+// için) kayıtlardaki ağırlıklı ortalama ÜRETİM maliyetine (TL/kg) dayanır — satın alma fiyatı
+// DEĞİL, kendi ürettiği için elektrik+işçilik+kullandığı çapak/hammadde maliyetinin toplamı.
+// "diğer birim"lerin (örn. Enjeksiyon Birimi) Genel Fabrika'nın Granül stoğundan tükettiği
+// girdinin maliyetini hesaplamak için kullanılır. `granulBirimVerisi` = Granül Birimi'nin,
+// `capakBirimVerisi` = Çapak Üretim Birimi'nin KENDİ bd'leri (window.api.getBirimData ile ayrıca
+// çekilmiş olmalı — bu fonksiyon STATE.birimVeri'ye HİÇ bakmaz, tamamen verilen parametrelerle çalışır).
+// Bir granül cinsinin GERÇEK ağırlıklı ortalama maliyeti (TL/kg) — "Genel Fabrika"nın Granül
+// stoğundaki HEM doğrudan satın alınan (Satın Alma > Granül) HEM DE kendi ürettiğimiz (kullanılan
+// çapağın ağırlıklı ortalama maliyeti + üretim/elektrik/işçilik payı) miktarların TAMAMI birlikte
+// sayılır — capakCinsiKgMaliyeti ile birebir aynı mantık, bir kademe yukarıda. Önceden bu
+// fonksiyon (adı granulUretimOrtalamaMaliyeti idi) SADECE kendi ürettiğimizi sayıyordu, doğrudan
+// satın alınan Granül'ü hiç hesaba katmıyordu — bu YANLIŞTI.
+// Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa (paylaşılan personel), o
+// ayki toplam ortak işçilik maliyeti (Granül Birimi'nin Aylık Kapanış'ında GİRİLİR, bkz.
+// ortakIscilikAylikMaas) iki birim arasında o ayki ÜRETİM KG'sine ORANTILI olarak bölüştürülür —
+// çok üreten birim, ortak maliyetten daha büyük bir pay alır. Bu, aynı maaşın HER İKİ birimin
+// maliyetine de TAM olarak (çift sayılarak) yansımasını önler.
+function ortakIscilikPayiHesapla(ay, granulBirimVerisi, capakBirimVerisi){
+  var kapanis = bulAylikKapanis(ay, granulBirimVerisi);
+  var ortakMaas = kapanis ? (Number(kapanis.ortakIscilikAylikMaas)||0) : 0;
+  if(!ortakMaas) return {granulPay:0, capakPay:0, ortakMaas:0, granulKg:0, capakKg:0};
+
+  var granulKg = (granulBirimVerisi.entries||[]).filter(function(e){ return (e.tarih||'').slice(0,7)===ay; })
+    .reduce(function(s,e){ return s+(Number(e.kg)||0); }, 0);
+  var capakKg = (capakBirimVerisi.capakUretimleri||[]).filter(function(cu){ return (cu.tarih||'').slice(0,7)===ay; })
+    .reduce(function(s,cu){ return s+(Number(cu.uretilenCapak)||0); }, 0);
+  var toplamKg = granulKg + capakKg;
+  if(!toplamKg) return {granulPay:0, capakPay:0, ortakMaas:ortakMaas, granulKg:0, capakKg:0};
+
+  return {
+    granulPay: ortakMaas * (granulKg/toplamKg),
+    capakPay: ortakMaas * (capakKg/toplamKg),
+    ortakMaas: ortakMaas, granulKg: granulKg, capakKg: capakKg
+  };
+}
+
+function granulCinsiKgMaliyeti(granulCinsi, granulBirimVerisi, capakBirimVerisi){
+  var toplamKg = 0, toplamMaliyet = 0;
+
+  // 1) Doğrudan satın alınan Granül (Satın Alma > Granül sekmesi, fireDestekli değil).
+  (STATE.merkeziSatinAlmalar.granulGirisleri||[]).filter(function(g){ return g.urun === granulCinsi; }).forEach(function(g){
+    var kg = Number(g.kg)||0;
+    if(!kg) return;
+    toplamKg += kg;
+    toplamMaliyet += girisNakliyeliToplamMaliyet(g);
+  });
+
+  // 2) Kendi ürettiğimiz Granül (Granül Birimi'nin entries'i).
+  (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi; }).forEach(function(e){
+    var kg = Number(e.kg)||0;
+    if(!kg) return;
+    toplamKg += kg;
+    var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
+    var maliyet = cst.maliyetGirildi ? cst.toplamMaliyet : 0;
+    // Bu granül üretiminde kullanılan çapağın (Genel Fabrika'daki hem satın alınan hem üretilen
+    // çapak havuzundan gelen) ağırlıklı ortalama maliyeti de dahil edilir (İşçilik kaynaklıysa 0 — bedelsiz).
+    if(e.capakCinsi && Number(e.kullanilanCapak) && e.capakKaynagi !== 'iscilik'){
+      maliyet += Number(e.kullanilanCapak) * capakCinsiKgMaliyeti(e.capakCinsi, capakBirimVerisi);
+    }
+    toplamMaliyet += maliyet;
+  });
+
+  return toplamKg ? toplamMaliyet/toplamKg : 0;
+}
+
+// "Diğer birim"lerin (örn. Şişirme/Enjeksiyon Birimi) ürettiği bir ürünün ağırlıklı ortalama
+// maliyeti (TL/adet ya da TL/kg — birime göre) — o ürünü üretmek için tüketilen girdinin
+// (kendi hammaddesi VEYA Genel Fabrika'nın paylaşımlı Granül stoğu) ağırlıklı ortalama maliyetine
+// dayanır. granulBirimVerisi/capakBirimVerisi sadece girdiTuru==='granul' olan kayıtlar varsa gerekir.
+function digerBirimUrunKgMaliyeti(veri, granulBirimVerisi, capakBirimVerisi, urunAdi){
+  var toplamMiktar = 0, toplamMaliyet = 0;
+  (veri.entries||[]).filter(function(e){ return e.urun === urunAdi; }).forEach(function(e){
+    var miktar = Number(e.kg)||0;
+    if(!miktar) return;
+    toplamMiktar += miktar;
+    if(e.hammaddeCinsi && Number(e.kullanilanCapak)){
+      if(e.girdiTuru === 'granul' && granulBirimVerisi){
+        toplamMaliyet += Number(e.kullanilanCapak) * granulCinsiKgMaliyeti(e.hammaddeCinsi, granulBirimVerisi, capakBirimVerisi||{});
+      } else if(e.girdiTuru !== 'granul'){
+        toplamMaliyet += Number(e.kullanilanCapak) * hammaddeOrtalamaFiyat(veri, e.hammaddeCinsi);
+      }
+    }
+  });
+  return toplamMiktar ? toplamMaliyet/toplamMiktar : 0;
+}
+
 // İşçilik Çapak stoğu: müşterinin bedelsiz getirdiği çapak — satın alınan (+) eksi Granül
 // Birimi'nde "İşçilik" kaynaklı olarak tüketilen (-). Normal (parayla alınan) çapak/granül
 // stoğundan TAMAMEN AYRI bir havuzdur (ağırlıklı ortalama maliyet hesaplarını bozmasın diye).
@@ -4651,7 +4850,9 @@ function computeHammaddeStoku(kaynak){
     hammadde[hg.urun] += Number(hg.kg)||0;
   });
   (kaynak.entries||[]).forEach(function(e){
-    if(e.hammaddeCinsi && Number(e.kullanilanCapak)){
+    // girdiTuru==='granul' olan kayıtlar bu birimin KENDİ hammadde stoğunu değil, Genel
+    // Fabrika'nın paylaşımlı Granül stoğunu tüketir (bkz. uretimKatkisiEkle) — burada SAYILMAZ.
+    if(e.hammaddeCinsi && Number(e.kullanilanCapak) && e.girdiTuru !== 'granul'){
       if(!(e.hammaddeCinsi in hammadde)) hammadde[e.hammaddeCinsi] = 0;
       hammadde[e.hammaddeCinsi] -= Number(e.kullanilanCapak)||0;
     }
@@ -4714,6 +4915,14 @@ function uretimKatkisiEkle(hurda, capak, granul, kaynak, opts){
       var cc = e.capakCinsi;
       if(!(cc in capak)) capak[cc] = 0;
       capak[cc] -= Number(e.kullanilanCapak)||0;
+    }
+    // "Diğer birim"lerin (örn. Enjeksiyon Birimi) Genel Fabrika'nın paylaşımlı Granül stoğundan
+    // tükettiği girdi — burada AYNI (Granül Birimi'nin ürettiği miktarın eklendiği) merkezi
+    // "granul" haritasından düşülür, kendi (bedelli) hammadde stoğuna hiç dokunmaz.
+    if(e.girdiTuru === 'granul' && e.hammaddeCinsi && Number(e.kullanilanCapak)){
+      var gc = e.hammaddeCinsi;
+      if(!(gc in granul)) granul[gc] = 0;
+      granul[gc] -= Number(e.kullanilanCapak)||0;
     }
     var hedefAdi = urunHangiHarita(kaynak, e.urun);
     var hedefHarita = hedefAdi === 'hurda' ? hurda : (hedefAdi === 'capak' ? capak : granul);
@@ -4797,15 +5006,37 @@ function capakUretimBirimiHurdaOrtalamaFiyat(hurdaCinsi){
 // Bir çapak cinsinin, o cinsi üretmek için BUGÜNE KADAR kullanılan hurdaların ağırlıklı ortalama
 // alım fiyatına dayanan TL/kg maliyeti. Satış kaydı oluşturulduğu anda hesaplanıp kalıcı olarak
 // saklanır (ileride hurda fiyatları değişse bile geçmiş satışın maliyeti değişmez).
-function capakCinsiKgMaliyeti(capakCinsi){
-  var uretimler = (STATE.birimVeri.capakUretimleri||[]).filter(function(cu){ return (cu.capakCinsi||cu.urun) === capakCinsi; });
-  var toplamUretilen = uretimler.reduce(function(s,cu){ return s + (Number(cu.uretilenCapak)||0); }, 0);
-  if(!toplamUretilen) return 0;
-  var toplamHurdaMaliyeti = uretimler.reduce(function(s,cu){
+// Bir çapak cinsinin GERÇEK ağırlıklı ortalama maliyeti (TL/kg) — BİRİKMİŞ TÜM stok kaynaklarını
+// (hem kendi ürettiğimiz hem doğrudan satın aldığımız) birlikte sayar. Önceden bu fonksiyon
+// SADECE kendi ürettiğimiz (hurdadan dönüştürdüğümüz) çapağı sayıyordu — dışarıdan doğrudan satın
+// alınan çapak (Satın Alma > Çapak sekmesi) hiç dahil edilmiyordu, bu da elde 1000 kg kendi
+// üretimimiz (örn. 15 TL/kg) + 2000 kg doğrudan alım (örn. 20 TL/kg) varken maliyeti YANLIŞ
+// şekilde sadece 15 TL/kg gösteriyordu; doğrusu ağırlıklı ortalama olan 18,33 TL/kg'dır.
+function capakCinsiKgMaliyeti(capakCinsi, capakBirimVeriOverride){
+  var veri = capakBirimVeriOverride || STATE.birimVeri;
+  var toplamKg = 0, toplamMaliyet = 0;
+
+  // 1) Kendi ürettiğimiz (hurdadan dönüştürdüğümüz) çapak — hurda maliyeti + üretim (elektrik/su/işçilik) payı.
+  (veri.capakUretimleri||[]).filter(function(cu){ return (cu.capakCinsi||cu.urun) === capakCinsi; }).forEach(function(cu){
+    var kg = Number(cu.uretilenCapak)||0;
+    if(!kg) return;
+    toplamKg += kg;
     var hc = cu.hurdaCinsi || cu.urun;
-    return s + (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(hc);
-  }, 0);
-  return toplamHurdaMaliyeti / toplamUretilen;
+    var hurdaMaliyeti = (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(hc);
+    var uretimCst = computeCapakMaliyet(cu, veri, vardiyaGrupToplamKg(cu, veri, 'capakUretimleri', 'uretilenCapak'));
+    toplamMaliyet += hurdaMaliyeti + (uretimCst.maliyetGirildi ? uretimCst.toplamMaliyet : 0);
+  });
+
+  // 2) Doğrudan dışarıdan satın alınan çapak (Satın Alma > Çapak sekmesi) — merkezi/paylaşımlı
+  // veri olduğu için hangi birim bağlamından çağrılırsa çağrılsın AYNI STATE.merkeziSatinAlmalar'dan gelir.
+  (STATE.merkeziSatinAlmalar.capakGirisleri||[]).filter(function(g){ return g.urun === capakCinsi; }).forEach(function(g){
+    var kg = fireliKg(g);
+    if(!kg) return;
+    toplamKg += kg;
+    toplamMaliyet += girisNakliyeliToplamMaliyet(g);
+  });
+
+  return toplamKg ? toplamMaliyet/toplamKg : 0;
 }
 
 // ============================================================
@@ -5675,11 +5906,36 @@ function renderCapakBilanco(c){
 
 // Bilanço, üç farklı birim türünde FARKLI bir "üretim maliyeti" hesabı kullanır (aşağıda), ama
 // AYNI "satış geliri" mantığını (musteriSatislari — TÜM birimlerde ortak — + Çapak Üretim
-// Birimi'nde AYRICA capakSatislari, Genel Fabrika'ya iç devir) paylaşır. Böylece Granül Birimi ve
-// "diğer birim"ler (örn. Şişirme) de artık gerçek müşteri satışlarının maliyet-vs-gelir
-// karşılaştırmasını görebiliyor — önceden bu ekran sadece Çapak Üretim Birimi'ndeydi ve sadece
-// Genel Fabrika'ya iç devri sayıyordu.
+// Birimi'nde AYRICA capakSatislari, Genel Fabrika'ya iç devir) paylaşır. "Üretim Maliyeti"
+// (elektrik+su+işçilik payı) ile "Hammadde Maliyeti" (tüketilen hurda/çapak/hammadde/granül
+// girdisinin maliyeti) ARTIK AYRI sütunlar — ikisinin toplamı "Toplam Maliyet"i verir. Bazı
+// hesaplar (Granül Birimi'nin çapak maliyeti, "diğer birim"lerin Genel Fabrika Granül stoğundan
+// tükettiği girdinin maliyeti) BAŞKA bir birimin kendi verisine ihtiyaç duyduğu için, gerektiğinde
+// o birimin verisi ÖNCE çekilir (async), sonra tablo çizilir.
 function renderCapakBilancoIcerik(){
+  var box = document.getElementById('cb_content'); if(!box) return;
+  box.innerHTML = '<div class="note">Yükleniyor…</div>';
+  var isGranul = STATE.aktifBirimId === 'granul-birimi';
+  var isCapak = STATE.aktifBirimId === 'capak-uretim-birimi';
+  var isDiger = digerBirimMi();
+  var digerGranulVarMi = isDiger && (STATE.birimVeri.entries||[]).some(function(e){ return e.girdiTuru==='granul'; });
+
+  var fetchler = [];
+  // Çapak Üretim Birimi'nin Bilanço'sunda "Ortak İşçilik" payını hesaplayabilmesi için Granül
+  // Birimi'nin verisine (o ay girilen ortakIscilikAylikMaas + o ayki granül kg'si) ihtiyacı var.
+  if(isGranul || digerGranulVarMi) fetchler.push(window.api.getBirimData('capak-uretim-birimi').then(function(v){ return {tur:'capak', veri:v}; }));
+  if(isCapak || digerGranulVarMi) fetchler.push(window.api.getBirimData('granul-birimi').then(function(v){ return {tur:'granul', veri:v}; }));
+
+  Promise.all(fetchler).then(function(sonuclar){
+    var capakBirimVerisi = null, granulBirimVerisiCapraz = null;
+    sonuclar.forEach(function(s){ if(s.tur==='capak') capakBirimVerisi=s.veri; if(s.tur==='granul') granulBirimVerisiCapraz=s.veri; });
+    renderCapakBilancoIcerikGercek(capakBirimVerisi, granulBirimVerisiCapraz);
+  }).catch(function(err){
+    box.innerHTML = '<div class="callout warn">'+escapeHtml(err.message)+'</div>';
+  });
+}
+
+function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVerisiCapraz){
   var box = document.getElementById('cb_content'); if(!box) return;
   var month = window.__cbSelMonth || todayStr().slice(0,7);
   var tumZaman = !!window.__cbTumZaman;
@@ -5689,7 +5945,7 @@ function renderCapakBilancoIcerik(){
   var birimOlcu = isDiger ? 'adet' : 'kg';
   var cinsEtiket = isCapak ? 'Çapak Cinsi' : (isGranul ? 'Granül Cinsi' : 'Ürün');
   var perCins = {};
-  function bosSatir(){ return {uretilenKg:0, uretimMaliyeti:0, satilanKg:0, satisGeliri:0}; }
+  function bosSatir(){ return {uretilenKg:0, uretimMaliyeti:0, hammaddeMaliyeti:0, satilanKg:0, satisGeliri:0}; }
 
   if(isCapak){
     var uretimler = (STATE.birimVeri.capakUretimleri||[]).filter(function(cu){ return tumZaman || cu.tarih.slice(0,7)===month; });
@@ -5698,11 +5954,11 @@ function renderCapakBilancoIcerik(){
       var cc = cu.capakCinsi || cu.urun;
       if(!perCins[cc]) perCins[cc] = bosSatir();
       perCins[cc].uretilenKg += Number(cu.uretilenCapak)||0;
-      // Üretim maliyeti: kullanılan hurdanın (ağırlıklı ortalama alım fiyatına göre) maliyeti +
-      // (o ayın maliyet parametreleri girilmişse) elektrik+su+işçilik payı.
-      var hurdaMaliyeti = (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(cu.hurdaCinsi||cu.urun);
+      // Hammadde Maliyeti: kullanılan hurdanın ağırlıklı ortalama alım fiyatına göre.
+      // Üretim Maliyeti: o ayın maliyet parametreleri girilmişse SADECE elektrik+su+işçilik payı.
+      perCins[cc].hammaddeMaliyeti += (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(cu.hurdaCinsi||cu.urun);
       var uretimCst = computeCapakMaliyet(cu, null, vardiyaGrupToplamKg(cu, STATE.birimVeri, 'capakUretimleri', 'uretilenCapak'));
-      perCins[cc].uretimMaliyeti += hurdaMaliyeti + (uretimCst.maliyetGirildi ? uretimCst.toplamMaliyet : 0);
+      perCins[cc].uretimMaliyeti += uretimCst.maliyetGirildi ? uretimCst.toplamMaliyet : 0;
     });
     // Genel Fabrika'ya iç devir (capakSatislari) — Müşteri Satışları'ndan AYRI bir gelir kalemi, ikisi de sayılır.
     (STATE.birimVeri.capakSatislari||[]).filter(function(cs){ return tumZaman || cs.tarih.slice(0,7)===month; }).forEach(function(cs){
@@ -5720,6 +5976,11 @@ function renderCapakBilancoIcerik(){
       perCins[u].uretilenKg += Number(e.kg)||0;
       var cst = computeCosts(e, STATE.birimVeri, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
       perCins[u].uretimMaliyeti += cst.maliyetGirildi ? cst.toplamMaliyet : 0;
+      // Hammadde Maliyeti: kullanılan çapağın ağırlıklı ortalama alım fiyatına göre — İşçilik
+      // kaynaklıysa (bedelsiz) 0 kalır, gerçek bir maliyet YOKTUR.
+      if(e.capakCinsi && Number(e.kullanilanCapak) && e.capakKaynagi !== 'iscilik'){
+        perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * capakCinsiKgMaliyeti(e.capakCinsi, capakBirimVerisiCapraz || {});
+      }
     });
   } else if(isDiger){
     var uretimler3 = (STATE.birimVeri.entries||[]).filter(function(e){ return tumZaman || e.tarih.slice(0,7)===month; });
@@ -5728,10 +5989,15 @@ function renderCapakBilancoIcerik(){
       var u = e.urun;
       if(!perCins[u]) perCins[u] = bosSatir();
       perCins[u].uretilenKg += Number(e.kg)||0;
-      // Üretim maliyeti: kullanılan hammaddenin ağırlıklı ortalama alım fiyatına göre. Hammadde
-      // seçilmemiş kayıtlarda (opsiyonel alan) maliyet hesaplanamaz, 0 kalır.
+      // Hammadde Maliyeti: girdi kaynağına göre — kendi (bedelli) hammaddesi ise ağırlıklı ortalama
+      // alım fiyatı; Genel Fabrika'nın paylaşımlı Granül stoğundan ise Granül Birimi'nin (kendi
+      // çapak maliyeti dahil) ağırlıklı ortalama ÜRETİM maliyeti. Girdi seçilmemiş kayıtlarda (opsiyonel) 0 kalır.
       if(e.hammaddeCinsi && Number(e.kullanilanCapak)){
-        perCins[u].uretimMaliyeti += Number(e.kullanilanCapak) * hammaddeOrtalamaFiyat(STATE.birimVeri, e.hammaddeCinsi);
+        if(e.girdiTuru === 'granul' && granulBirimVerisiCapraz){
+          perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * granulCinsiKgMaliyeti(e.hammaddeCinsi, granulBirimVerisiCapraz, capakBirimVerisiCapraz||{});
+        } else if(e.girdiTuru !== 'granul'){
+          perCins[u].hammaddeMaliyeti += Number(e.kullanilanCapak) * hammaddeOrtalamaFiyat(STATE.birimVeri, e.hammaddeCinsi);
+        }
       }
     });
   }
@@ -5745,18 +6011,45 @@ function renderCapakBilancoIcerik(){
   });
 
   var cinsler = Object.keys(perCins).filter(function(k){ var v = perCins[k]; return v.uretilenKg>0 || v.satilanKg>0; });
-  var toplam = {uretilenKg:0, uretimMaliyeti:0, satilanKg:0, satisGeliri:0};
+  var toplam = {uretilenKg:0, uretimMaliyeti:0, hammaddeMaliyeti:0, satilanKg:0, satisGeliri:0};
   cinsler.forEach(function(k){
     toplam.uretilenKg += perCins[k].uretilenKg; toplam.uretimMaliyeti += perCins[k].uretimMaliyeti;
+    toplam.hammaddeMaliyeti += perCins[k].hammaddeMaliyeti;
     toplam.satilanKg += perCins[k].satilanKg; toplam.satisGeliri += perCins[k].satisGeliri;
   });
-  var toplamKarZarar = toplam.satisGeliri - toplam.uretimMaliyeti;
+
+  // Ortak İşçilik Payı: Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa, o
+  // ayki (veya "Tüm Zamanlar" seçiliyse HER AY için ayrı ayrı hesaplanan) paylaşılan personel
+  // maliyeti, o ayki kg üretim oranına göre bölüştürülüp buraya eklenir. Cins bazlı satırlara DEĞİL,
+  // sadece GENEL toplama eklenir (hangi cinsin ne kadar pay alacağı belirsiz bir dağıtım olurdu) —
+  // bu yüzden tablodaki satırların toplamı ile genel "Toplam Maliyet" arasındaki fark, bu paydır.
+  var ortakIscilikToplam = 0;
+  if(isGranul || isCapak){
+    var kaynakGranul = isGranul ? STATE.birimVeri : granulBirimVerisiCapraz;
+    var kaynakCapak = isCapak ? STATE.birimVeri : capakBirimVerisiCapraz;
+    if(kaynakGranul && kaynakCapak){
+      var aylar = tumZaman ? (function(){
+        var s = {};
+        (kaynakGranul.entries||[]).forEach(function(e){ if(e.tarih) s[e.tarih.slice(0,7)]=true; });
+        (kaynakCapak.capakUretimleri||[]).forEach(function(cu){ if(cu.tarih) s[cu.tarih.slice(0,7)]=true; });
+        return Object.keys(s);
+      })() : [month];
+      aylar.forEach(function(ay){
+        var pay = ortakIscilikPayiHesapla(ay, kaynakGranul, kaynakCapak);
+        ortakIscilikToplam += isGranul ? pay.granulPay : pay.capakPay;
+      });
+    }
+  }
+
+  var toplamMaliyet = toplam.uretimMaliyeti + toplam.hammaddeMaliyeti + ortakIscilikToplam;
+  var toplamKarZarar = toplam.satisGeliri - toplamMaliyet;
   function miktarGoster(v){ return isDiger ? fmt(v)+' adet' : fmtKg(v)+' kg'; }
 
   box.innerHTML =
-    '<div class="callout">Bu tablo, seçilen dönemde <b>üretilen</b>'+(isCapak?' çapağın':'')+' maliyetiyle, aynı dönemde <b>satılan</b> miktarın gelirini '+cinsEtiket.toLowerCase()+' bazında karşılaştırır'+(isCapak?' (Genel Fabrika\'ya iç devir + gerçek müşteri satışları birlikte sayılır)':' (gerçek müşteri satışları)')+'. Üretim ve satış farklı partiler olabileceği için bu, birebir eşleşmiş bir "parti kârı" değil, dönemin genel bir karşılaştırmasıdır.'+(isDiger?' Üretim maliyeti sadece hammadde cinsi SEÇİLMİŞ kayıtlar için hesaplanabilir.':'')+'</div>'+
+    '<div class="callout">Bu tablo, seçilen dönemde <b>üretilen</b>'+(isCapak?' çapağın':'')+' maliyetiyle, aynı dönemde <b>satılan</b> miktarın gelirini '+cinsEtiket.toLowerCase()+' bazında karşılaştırır'+(isCapak?' (Genel Fabrika\'ya iç devir + gerçek müşteri satışları birlikte sayılır)':' (gerçek müşteri satışları)')+'. "Toplam Maliyet" = Üretim Maliyeti (elektrik/su/işçilik payı) + Hammadde Maliyeti (tüketilen hurda/çapak/hammadde/granül girdisinin maliyeti)'+((isGranul||isCapak)?' + Ortak İşçilik Payı (aşağıda)':'')+'. Üretim ve satış farklı partiler olabileceği için bu, birebir eşleşmiş bir "parti kârı" değil, dönemin genel bir karşılaştırmasıdır.'+(isDiger?' Hammadde maliyeti sadece girdi kaynağı SEÇİLMİŞ kayıtlar için hesaplanabilir.':'')+'</div>'+
+    ((isGranul||isCapak) && ortakIscilikToplam>0 ? '<div class="callout" style="margin-top:10px;">Bu tutara, Çapak Üretim Birimi ile PAYLAŞILAN personelin, seçilen dönemdeki kg üretim oranına göre bu birime düşen <b>Ortak İşçilik Payı: '+fmt(ortakIscilikToplam)+' TL</b> dahildir (cins bazlı tabloya değil, sadece genel toplama eklenir — bkz. Aylık Kapanış).</div>' : '')+
     '<div class="grid grid-3" style="margin-top:16px;">'+
-      '<div class="card"><h3>Toplam Üretim Maliyeti</h3><div class="stat">'+fmt(toplam.uretimMaliyeti)+'<small>TL</small></div></div>'+
+      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+fmt(toplamMaliyet)+'<small>TL (Üretim: '+fmt(toplam.uretimMaliyeti)+' + Hammadde: '+fmt(toplam.hammaddeMaliyeti)+(ortakIscilikToplam>0?(' + Ortak İşçilik: '+fmt(ortakIscilikToplam)):'')+')</small></div></div>'+
       '<div class="card"><h3>Toplam Satış Geliri</h3><div class="stat">'+fmt(toplam.satisGeliri)+'<small>TL</small></div></div>'+
       '<div class="card"><h3>Fark (Gelir − Maliyet)</h3><div class="stat" style="color:'+(toplamKarZarar<0?'var(--danger)':'#2ea043')+';">'+fmt(toplamKarZarar)+'<small>TL</small></div></div>'+
     '</div>'+
@@ -5765,12 +6058,14 @@ function renderCapakBilancoIcerik(){
       (cinsler.length===0 ? '' : '<button class="btn ghost small" id="cb_pdf_btn">PDF Olarak Dışa Aktar</button>')+
     '</div>'+
     (cinsler.length===0 ? '<div class="empty"><b>Bu dönemde üretim veya satış kaydı yok</b></div>' :
-      '<div class="card"><table><thead><tr><th>'+escapeHtml(cinsEtiket)+'</th><th>Üretilen ('+birimOlcu+')</th><th>Üretim Maliyeti (TL)</th><th>Satılan ('+birimOlcu+')</th><th>Satış Geliri (TL)</th><th>Fark (TL)</th></tr></thead><tbody>'+
+      '<div class="card"><table><thead><tr><th>'+escapeHtml(cinsEtiket)+'</th><th>Üretilen ('+birimOlcu+')</th><th>Üretim Maliyeti (TL)</th><th>Hammadde Maliyeti (TL)</th><th>Toplam Maliyet (TL)</th><th>Satılan ('+birimOlcu+')</th><th>Satış Geliri (TL)</th><th>Fark (TL)</th></tr></thead><tbody>'+
         cinsler.map(function(k){
           var v = perCins[k];
-          var fark = v.satisGeliri - v.uretimMaliyeti;
+          var satirToplamMaliyet = v.uretimMaliyeti + v.hammaddeMaliyeti;
+          var fark = v.satisGeliri - satirToplamMaliyet;
           return '<tr><td class="txt"><span class="tag '+tagClassFor(k)+'">'+escapeHtml(k)+'</span></td>'+
             '<td>'+miktarGoster(v.uretilenKg)+'</td><td>'+fmt(v.uretimMaliyeti)+'</td>'+
+            '<td>'+fmt(v.hammaddeMaliyeti)+'</td><td><b>'+fmt(satirToplamMaliyet)+'</b></td>'+
             '<td>'+miktarGoster(v.satilanKg)+'</td><td>'+fmt(v.satisGeliri)+'</td>'+
             '<td style="color:'+(fark<0?'var(--danger)':'#2ea043')+';"><b>'+fmt(fark)+'</b></td></tr>';
         }).join('')+
@@ -5781,21 +6076,25 @@ function renderCapakBilancoIcerik(){
       baslik: aktifBirimAdi()+' — Bilanço ('+(tumZaman?'Tüm Zamanlar':ayGoster(month))+')',
       sutunlar: [
         {key:'cins', label:cinsEtiket}, {key:'uretilenKg', label:'Üretilen ('+birimOlcu+')'}, {key:'uretimMaliyeti', label:'Üretim Maliyeti (TL)'},
+        {key:'hammaddeMaliyeti', label:'Hammadde Maliyeti (TL)'}, {key:'toplamMaliyet', label:'Toplam Maliyet (TL)'},
         {key:'satilanKg', label:'Satılan ('+birimOlcu+')'}, {key:'satisGeliri', label:'Satış Geliri (TL)'}, {key:'fark', label:'Fark (TL)'}
       ],
       kayitlarGetir: function(){
         return cinsler.map(function(k){
           var v = perCins[k];
-          return { cins:k, uretilenKg:v.uretilenKg, uretimMaliyeti:v.uretimMaliyeti, satilanKg:v.satilanKg, satisGeliri:v.satisGeliri, fark:v.satisGeliri-v.uretimMaliyeti };
+          var stm = v.uretimMaliyeti + v.hammaddeMaliyeti;
+          return { cins:k, uretilenKg:v.uretilenKg, uretimMaliyeti:v.uretimMaliyeti, hammaddeMaliyeti:v.hammaddeMaliyeti, toplamMaliyet:stm, satilanKg:v.satilanKg, satisGeliri:v.satisGeliri, fark:v.satisGeliri-stm };
         });
       },
       satirDegeri: function(r, key){
         if(key==='uretilenKg'||key==='satilanKg') return miktarGoster(r[key]);
-        if(key==='uretimMaliyeti'||key==='satisGeliri'||key==='fark') return fmt(r[key])+' TL';
+        if(key==='uretimMaliyeti'||key==='hammaddeMaliyeti'||key==='toplamMaliyet'||key==='satisGeliri'||key==='fark') return fmt(r[key])+' TL';
         return r[key] || '';
       },
       ozetSatirlari: function(){
-        return [{etiket:'Toplam Üretim Maliyeti', deger:fmt(toplam.uretimMaliyeti)+' TL'}, {etiket:'Toplam Satış Geliri', deger:fmt(toplam.satisGeliri)+' TL'}, {etiket:'Fark', deger:fmt(toplamKarZarar)+' TL'}];
+        return [{etiket:'Toplam Üretim Maliyeti', deger:fmt(toplam.uretimMaliyeti)+' TL'}, {etiket:'Toplam Hammadde Maliyeti', deger:fmt(toplam.hammaddeMaliyeti)+' TL'}]
+          .concat(ortakIscilikToplam>0 ? [{etiket:'Ortak İşçilik Payı', deger:fmt(ortakIscilikToplam)+' TL'}] : [])
+          .concat([{etiket:'Toplam Maliyet', deger:fmt(toplamMaliyet)+' TL'}, {etiket:'Toplam Satış Geliri', deger:fmt(toplam.satisGeliri)+' TL'}, {etiket:'Fark', deger:fmt(toplamKarZarar)+' TL'}]);
       }
     });
   });
