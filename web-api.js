@@ -91,13 +91,15 @@
       var bd = VERI.birimVerileri[birimId] || {};
       return Promise.resolve(Object.assign({}, bd, {
         merkeziCinsler: VERI.merkeziCinsler,
-        merkeziSatinAlmalar: VERI.merkeziSatinAlmalar
+        merkeziSatinAlmalar: VERI.merkeziSatinAlmalar,
+        aylikFiyatlar: VERI.aylikFiyatlar || []
       }));
     },
     getMerkeziCinsler: function () { return Promise.resolve(VERI.merkeziCinsler); },
     getMerkeziSatinAlmalar: function () { return Promise.resolve(VERI.merkeziSatinAlmalar); },
     getMusteriler: function () { return Promise.resolve({ musteriler: VERI.musteriler, cariHareketler: VERI.cariHareketler }); },
     getPersonelListesi: function () { return Promise.resolve(VERI.personelListesi || []); },
+    getAylikFiyatlar: function () { return Promise.resolve(VERI.aylikFiyatlar || []); },
     getBekleyenIslemler: function () { return Promise.resolve(VERI.bekleyenIslemler); },
     getGeriBildirimler: function () { return Promise.resolve(VERI.geriBildirimler); },
     getMesajlarim: function (kullaniciId) {
@@ -121,7 +123,7 @@
     'deleteKullanici', 'deleteMesaj', 'deleteMusteri', 'deleteMusteriFiyat', 'deleteMusteriSatisi', 'deletePersonel', 'deletePersonelMerkezi',
     'deleteUnvan', 'deleteUrun', 'emptyCopKutusu', 'markGeriBildirimDurum', 'markMesajlarOkundu', 'reorderBirim',
     'reorderCapakCinsi', 'reorderEkKategori', 'reorderEkKategoriOge', 'reorderHammaddeCinsi', 'reorderHurdaCinsi',
-    'reorderUrun', 'restoreCop', 'restoreDailyBackup', 'saveAylikKapanis', 'saveSettings', 'sendMesaj',
+    'reorderUrun', 'restoreCop', 'restoreDailyBackup', 'saveAylikKapanis', 'saveAylikFiyat', 'saveSettings', 'sendMesaj',
     'setAnaUretimTuru', 'setCinsAktif', 'setSatinAlimAktif', 'updateBirimAdi', 'updateCapakCinsi',
     'updateCapakCinsiGramaj', 'updateCapakGirisi', 'updateCapakSatisi', 'updateCapakUretimi', 'updateCariHareket',
     'updateCinsBasligi', 'updateEkKategoriBaslik', 'updateEkKategoriOge', 'updateEkKategoriOgeGramaj',
