@@ -6558,7 +6558,11 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
 
   // Ortak İşçilik Payı: Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa, o
   // ayki (veya "Tüm Zamanlar" seçiliyse HER AY için ayrı ayrı hesaplanan) paylaşılan personel
-  // maliyeti, o ayki kg üretim oranına göre bölüştürülüp buraya eklenir. Cins bazlı satırlara DEĞİL,
+  // maliyeti, o ayki kg üretim oranına göre iki birim arasında bölüştürülür. Bu birime düşen payın
+  // KENDİSİ ise, o ayın GERÇEK KAYITLI vardiya süresine orantılı (SAAT bazlı, maaş/225×süre
+  // formülüyle TUTARLI) hesaplanır — TAM AYLIK (ay bitmiş gibi) DEĞİL. Bu, Panel/Aylık Rapor'daki
+  // "anlık" mantıkla TUTARLI olması İÇİN gereklidir; aksi halde devam eden bir ay için (henüz
+  // tamamlanmamışken) rakam yanıltıcı derecede yüksek görünürdü. Cins bazlı satırlara DEĞİL,
   // sadece GENEL toplama eklenir (hangi cinsin ne kadar pay alacağı belirsiz bir dağıtım olurdu) —
   // bu yüzden tablodaki satırların toplamı ile genel "Toplam Maliyet" arasındaki fark, bu paydır.
   var ortakIscilikToplam = 0;
@@ -6574,7 +6578,20 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
       })() : [month];
       aylar.forEach(function(ay){
         var pay = ortakIscilikPayiHesapla(ay, kaynakGranul, kaynakCapak, personelListesi);
-        ortakIscilikToplam += isGranul ? pay.granulPay : pay.capakPay;
+        var payTutari = isGranul ? pay.granulPay : pay.capakPay;
+        if(!payTutari) return;
+        var aylikFiyatBu = bulAylikFiyat(ay, isGranul ? kaynakGranul : kaynakCapak);
+        if(!aylikFiyatBu || !aylikFiyatBu.aylikCalismaSuresi) return;
+        var saatlikOran = payTutari / aylikFiyatBu.aylikCalismaSuresi;
+        var toplamSureBuAy;
+        if(isGranul){
+          var buAyEntries = (kaynakGranul.entries||[]).filter(function(e){ return e.tarih.slice(0,7)===ay; });
+          toplamSureBuAy = buAyEntries.reduce(function(s,e){ return s+computeCosts(e, kaynakGranul, vardiyaGrupToplamKg(e, kaynakGranul, 'entries', 'kg')).gosterilenSure; },0);
+        } else {
+          var buAyUretimler = (kaynakCapak.capakUretimleri||[]).filter(function(cu){ return cu.tarih.slice(0,7)===ay; });
+          toplamSureBuAy = buAyUretimler.reduce(function(s,cu){ return s+computeCapakMaliyet(cu, kaynakCapak, vardiyaGrupToplamKg(cu, kaynakCapak, 'capakUretimleri', 'uretilenCapak')).gosterilenSure; },0);
+        }
+        ortakIscilikToplam += saatlikOran * toplamSureBuAy;
       });
     }
   }
