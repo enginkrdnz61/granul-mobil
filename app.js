@@ -5276,9 +5276,13 @@ function granulCinsiKgMaliyeti(granulCinsi, granulBirimVerisi, capakBirimVerisi)
   (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi && e.capakKaynagi !== 'iscilik'; }).forEach(function(e){
     var kg = Number(e.kg)||0;
     if(!kg) return;
-    toplamKg += kg;
     var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
-    var maliyet = cst.maliyetGirildi ? cst.toplamMaliyet : 0;
+    // Eğer bu kaydın ait olduğu ay için elektrik fiyatı/maaş henüz girilmemişse (maliyetGirildi
+    // false), bu kayıt TAMAMEN hariç tutulur — hem kg'den hem maliyetten. Sadece maliyeti 0 sayıp
+    // kg'yi dahil etmek, ortalamayı SUNİ ŞEKİLDE DÜŞÜRÜR (payda şişer, pay şişmez).
+    if(!cst.maliyetGirildi) return;
+    toplamKg += kg;
+    var maliyet = cst.toplamMaliyet;
     // Bu granül üretiminde kullanılan çapağın (Genel Fabrika'daki hem satın alınan hem üretilen
     // çapak havuzundan gelen) ağırlıklı ortalama maliyeti de dahil edilir.
     if(e.capakCinsi && Number(e.kullanilanCapak)){
@@ -5300,9 +5304,13 @@ function granulCinsiIscilikStokMaliyeti(granulCinsi, granulBirimVerisi){
   (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi && e.capakKaynagi === 'iscilik'; }).forEach(function(e){
     var kg = Number(e.kg)||0;
     if(!kg) return;
-    toplamKg += kg;
     var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
-    toplamMaliyet += cst.maliyetGirildi ? cst.toplamMaliyet : 0;
+    // Eğer bu kaydın ait olduğu ay için elektrik fiyatı/maaş henüz girilmemişse (maliyetGirildi
+    // false), bu kayıt TAMAMEN hariç tutulur — hem kg'den hem maliyetten. Sadece maliyeti 0 sayıp
+    // kg'yi dahil etmek, ortalamayı SUNİ ŞEKİLDE DÜŞÜRÜR (payda şişer, pay şişmez).
+    if(!cst.maliyetGirildi) return;
+    toplamKg += kg;
+    toplamMaliyet += cst.toplamMaliyet;
   });
   return toplamKg ? toplamMaliyet/toplamKg : 0;
 }
@@ -5544,11 +5552,16 @@ function capakCinsiKgMaliyeti(capakCinsi, capakBirimVeriOverride){
   (veri.capakUretimleri||[]).filter(function(cu){ return (cu.capakCinsi||cu.urun) === capakCinsi; }).forEach(function(cu){
     var kg = Number(cu.uretilenCapak)||0;
     if(!kg) return;
+    var uretimCst = computeCapakMaliyet(cu, veri, vardiyaGrupToplamKg(cu, veri, 'capakUretimleri', 'uretilenCapak'));
+    // Eğer bu kaydın ait olduğu ay için elektrik/su fiyatı henüz girilmemişse (maliyetGirildi
+    // false), bu kayıt TAMAMEN hariç tutulur — hem kg'den hem maliyetten (hurda dahil). Sadece
+    // üretim maliyetini 0 sayıp kg'yi (ve hurda maliyetini) dahil etmek, ortalamayı SUNİ ŞEKİLDE
+    // DÜŞÜRÜR (payda şişer, pay şişmez).
+    if(!uretimCst.maliyetGirildi) return;
     toplamKg += kg;
     var hc = cu.hurdaCinsi || cu.urun;
     var hurdaMaliyeti = (Number(cu.kullanilanHurda)||0) * capakUretimBirimiHurdaOrtalamaFiyat(hc);
-    var uretimCst = computeCapakMaliyet(cu, veri, vardiyaGrupToplamKg(cu, veri, 'capakUretimleri', 'uretilenCapak'));
-    toplamMaliyet += hurdaMaliyeti + (uretimCst.maliyetGirildi ? uretimCst.toplamMaliyet : 0);
+    toplamMaliyet += hurdaMaliyeti + uretimCst.toplamMaliyet;
   });
 
   // 2) Doğrudan dışarıdan satın alınan çapak (Satın Alma > Çapak sekmesi) — merkezi/paylaşımlı
