@@ -4337,6 +4337,7 @@ function renderAylikContent(month){
             '<div><div class="note">Aylık Çalışma Süresi</div><b class="mono">'+fmt(kapanis.aylikCalismaSuresi)+' saat</b></div>'+
             '<div><div class="note">Agromel Gündüz/Gece</div><b class="mono">'+fmt(kapanis.agromelGunduzMaas)+' / '+fmt(kapanis.agromelGeceMaas)+' TL</b></div>'+
             '<div><div class="note">Granül Gündüz/Gece</div><b class="mono">'+fmt(kapanis.granulGunduzMaas)+' / '+fmt(kapanis.granulGeceMaas)+' TL</b></div>'+
+            (Number(kapanis.ortakIscilikAylikMaas) ? '<div><div class="note">Ortak İşçilik (Çapak+Granül)</div><b class="mono">'+fmt(kapanis.ortakIscilikAylikMaas)+' TL/ay</b></div>' : '')+
           '</div>'+
           '<button class="btn ghost small" id="kapanis_duzenle" style="margin-top:14px;">Düzenle</button>'
         : '<div class="callout warn">Bu ay (<b class="mono">'+ayGoster(month)+'</b>) için maliyet parametreleri henüz girilmedi. Üretim kayıtları normal girilebilir; maliyet hesabı bu parametreler girilince otomatik oluşur.</div>'+
@@ -4356,6 +4357,8 @@ function renderAylikContent(month){
           '<div class="field"><label>Granül Gece Maaşı (TL)</label><input type="number" step="100" id="kap_gran_gece" value="'+(kapanis?kapanis.granulGeceMaas:0)+'"></div>'+
         '</div>'+
         '<button type="button" class="btn ghost small" id="kapanis_maas_senkron" style="margin:-4px 0 10px;">↻ Personel sekmesindeki güncel toplamlarla doldur</button>'+
+        '<div class="field"><label>Ortak İşçilik — Çapak Üretim Birimi ile PAYLAŞILAN personelin bu AYKİ toplam maaş gideri (TL)</label><input type="number" step="100" id="kap_ortak_iscilik" value="'+(kapanis?(kapanis.ortakIscilikAylikMaas||0):0)+'"></div>'+
+        '<div class="note" style="margin:-6px 0 13px;">Aynı kişiler hem Çapak Üretim hem Granül Birimi\'nde çalışıyorsa, o kişilerin TOPLAM aylık maaşını buraya (tek bir toplam olarak) girin. Ay sonunda bu tutar, o ayki Granül ve Çapak Üretim kg üretim ORANINA göre otomatik olarak iki birim arasında bölüştürülür (bkz. Bilanço). Ortak personel yoksa 0 bırakın.</div>'+
         '<div class="note" style="margin-bottom:10px;">Maaş değerleri, "Bu Ayı Kaydet"e bastığınız andaki tutarda SABİT kalır (geçmiş ayların maliyeti sonradan değişmesin diye).</div>'+
         '<button class="btn" id="kapanis_kaydet">Bu Ayı Kaydet</button> '+
         '<button class="btn ghost" id="kapanis_vazgec">Vazgeç</button>'+
@@ -4441,7 +4444,8 @@ function renderAylikContent(month){
       agromelGunduzMaas: Number((document.getElementById('kap_agro_gunduz')||{value:''}).value),
       agromelGeceMaas: Number((document.getElementById('kap_agro_gece')||{value:''}).value),
       granulGunduzMaas: Number((document.getElementById('kap_gran_gunduz')||{value:''}).value),
-      granulGeceMaas: Number((document.getElementById('kap_gran_gece')||{value:''}).value)
+      granulGeceMaas: Number((document.getElementById('kap_gran_gece')||{value:''}).value),
+      ortakIscilikAylikMaas: Number((document.getElementById('kap_ortak_iscilik')||{value:0}).value)
     };
     window.api.saveAylikKapanis(STATE.aktifBirimId, month, obj).then(function(kapanislar){
       STATE.birimVeri.aylikKapanislar = kapanislar;
@@ -4810,6 +4814,30 @@ function hammaddeOrtalamaFiyat(veri, hammaddeCinsi){
 // sayılır — capakCinsiKgMaliyeti ile birebir aynı mantık, bir kademe yukarıda. Önceden bu
 // fonksiyon (adı granulUretimOrtalamaMaliyeti idi) SADECE kendi ürettiğimizi sayıyordu, doğrudan
 // satın alınan Granül'ü hiç hesaba katmıyordu — bu YANLIŞTI.
+// Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa (paylaşılan personel), o
+// ayki toplam ortak işçilik maliyeti (Granül Birimi'nin Aylık Kapanış'ında GİRİLİR, bkz.
+// ortakIscilikAylikMaas) iki birim arasında o ayki ÜRETİM KG'sine ORANTILI olarak bölüştürülür —
+// çok üreten birim, ortak maliyetten daha büyük bir pay alır. Bu, aynı maaşın HER İKİ birimin
+// maliyetine de TAM olarak (çift sayılarak) yansımasını önler.
+function ortakIscilikPayiHesapla(ay, granulBirimVerisi, capakBirimVerisi){
+  var kapanis = bulAylikKapanis(ay, granulBirimVerisi);
+  var ortakMaas = kapanis ? (Number(kapanis.ortakIscilikAylikMaas)||0) : 0;
+  if(!ortakMaas) return {granulPay:0, capakPay:0, ortakMaas:0, granulKg:0, capakKg:0};
+
+  var granulKg = (granulBirimVerisi.entries||[]).filter(function(e){ return (e.tarih||'').slice(0,7)===ay; })
+    .reduce(function(s,e){ return s+(Number(e.kg)||0); }, 0);
+  var capakKg = (capakBirimVerisi.capakUretimleri||[]).filter(function(cu){ return (cu.tarih||'').slice(0,7)===ay; })
+    .reduce(function(s,cu){ return s+(Number(cu.uretilenCapak)||0); }, 0);
+  var toplamKg = granulKg + capakKg;
+  if(!toplamKg) return {granulPay:0, capakPay:0, ortakMaas:ortakMaas, granulKg:0, capakKg:0};
+
+  return {
+    granulPay: ortakMaas * (granulKg/toplamKg),
+    capakPay: ortakMaas * (capakKg/toplamKg),
+    ortakMaas: ortakMaas, granulKg: granulKg, capakKg: capakKg
+  };
+}
+
 function granulCinsiKgMaliyeti(granulCinsi, granulBirimVerisi, capakBirimVerisi){
   var toplamKg = 0, toplamMaliyet = 0;
 
@@ -5972,12 +6000,15 @@ function renderCapakBilancoIcerik(){
   var box = document.getElementById('cb_content'); if(!box) return;
   box.innerHTML = '<div class="note">Yükleniyor…</div>';
   var isGranul = STATE.aktifBirimId === 'granul-birimi';
+  var isCapak = STATE.aktifBirimId === 'capak-uretim-birimi';
   var isDiger = digerBirimMi();
   var digerGranulVarMi = isDiger && (STATE.birimVeri.entries||[]).some(function(e){ return e.girdiTuru==='granul'; });
 
   var fetchler = [];
+  // Çapak Üretim Birimi'nin Bilanço'sunda "Ortak İşçilik" payını hesaplayabilmesi için Granül
+  // Birimi'nin verisine (o ay girilen ortakIscilikAylikMaas + o ayki granül kg'si) ihtiyacı var.
   if(isGranul || digerGranulVarMi) fetchler.push(window.api.getBirimData('capak-uretim-birimi').then(function(v){ return {tur:'capak', veri:v}; }));
-  if(digerGranulVarMi) fetchler.push(window.api.getBirimData('granul-birimi').then(function(v){ return {tur:'granul', veri:v}; }));
+  if(isCapak || digerGranulVarMi) fetchler.push(window.api.getBirimData('granul-birimi').then(function(v){ return {tur:'granul', veri:v}; }));
 
   Promise.all(fetchler).then(function(sonuclar){
     var capakBirimVerisi = null, granulBirimVerisiCapraz = null;
@@ -6070,14 +6101,39 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
     toplam.hammaddeMaliyeti += perCins[k].hammaddeMaliyeti;
     toplam.satilanKg += perCins[k].satilanKg; toplam.satisGeliri += perCins[k].satisGeliri;
   });
-  var toplamMaliyet = toplam.uretimMaliyeti + toplam.hammaddeMaliyeti;
+
+  // Ortak İşçilik Payı: Çapak Üretim Birimi ile Granül Birimi'nde AYNI kişiler çalışıyorsa, o
+  // ayki (veya "Tüm Zamanlar" seçiliyse HER AY için ayrı ayrı hesaplanan) paylaşılan personel
+  // maliyeti, o ayki kg üretim oranına göre bölüştürülüp buraya eklenir. Cins bazlı satırlara DEĞİL,
+  // sadece GENEL toplama eklenir (hangi cinsin ne kadar pay alacağı belirsiz bir dağıtım olurdu) —
+  // bu yüzden tablodaki satırların toplamı ile genel "Toplam Maliyet" arasındaki fark, bu paydır.
+  var ortakIscilikToplam = 0;
+  if(isGranul || isCapak){
+    var kaynakGranul = isGranul ? STATE.birimVeri : granulBirimVerisiCapraz;
+    var kaynakCapak = isCapak ? STATE.birimVeri : capakBirimVerisiCapraz;
+    if(kaynakGranul && kaynakCapak){
+      var aylar = tumZaman ? (function(){
+        var s = {};
+        (kaynakGranul.entries||[]).forEach(function(e){ if(e.tarih) s[e.tarih.slice(0,7)]=true; });
+        (kaynakCapak.capakUretimleri||[]).forEach(function(cu){ if(cu.tarih) s[cu.tarih.slice(0,7)]=true; });
+        return Object.keys(s);
+      })() : [month];
+      aylar.forEach(function(ay){
+        var pay = ortakIscilikPayiHesapla(ay, kaynakGranul, kaynakCapak);
+        ortakIscilikToplam += isGranul ? pay.granulPay : pay.capakPay;
+      });
+    }
+  }
+
+  var toplamMaliyet = toplam.uretimMaliyeti + toplam.hammaddeMaliyeti + ortakIscilikToplam;
   var toplamKarZarar = toplam.satisGeliri - toplamMaliyet;
   function miktarGoster(v){ return isDiger ? fmt(v)+' adet' : fmtKg(v)+' kg'; }
 
   box.innerHTML =
-    '<div class="callout">Bu tablo, seçilen dönemde <b>üretilen</b>'+(isCapak?' çapağın':'')+' maliyetiyle, aynı dönemde <b>satılan</b> miktarın gelirini '+cinsEtiket.toLowerCase()+' bazında karşılaştırır'+(isCapak?' (Genel Fabrika\'ya iç devir + gerçek müşteri satışları birlikte sayılır)':' (gerçek müşteri satışları)')+'. "Toplam Maliyet" = Üretim Maliyeti (elektrik/su/işçilik payı) + Hammadde Maliyeti (tüketilen hurda/çapak/hammadde/granül girdisinin maliyeti). Üretim ve satış farklı partiler olabileceği için bu, birebir eşleşmiş bir "parti kârı" değil, dönemin genel bir karşılaştırmasıdır.'+(isDiger?' Hammadde maliyeti sadece girdi kaynağı SEÇİLMİŞ kayıtlar için hesaplanabilir.':'')+'</div>'+
+    '<div class="callout">Bu tablo, seçilen dönemde <b>üretilen</b>'+(isCapak?' çapağın':'')+' maliyetiyle, aynı dönemde <b>satılan</b> miktarın gelirini '+cinsEtiket.toLowerCase()+' bazında karşılaştırır'+(isCapak?' (Genel Fabrika\'ya iç devir + gerçek müşteri satışları birlikte sayılır)':' (gerçek müşteri satışları)')+'. "Toplam Maliyet" = Üretim Maliyeti (elektrik/su/işçilik payı) + Hammadde Maliyeti (tüketilen hurda/çapak/hammadde/granül girdisinin maliyeti)'+((isGranul||isCapak)?' + Ortak İşçilik Payı (aşağıda)':'')+'. Üretim ve satış farklı partiler olabileceği için bu, birebir eşleşmiş bir "parti kârı" değil, dönemin genel bir karşılaştırmasıdır.'+(isDiger?' Hammadde maliyeti sadece girdi kaynağı SEÇİLMİŞ kayıtlar için hesaplanabilir.':'')+'</div>'+
+    ((isGranul||isCapak) && ortakIscilikToplam>0 ? '<div class="callout" style="margin-top:10px;">Bu tutara, Çapak Üretim Birimi ile PAYLAŞILAN personelin, seçilen dönemdeki kg üretim oranına göre bu birime düşen <b>Ortak İşçilik Payı: '+fmt(ortakIscilikToplam)+' TL</b> dahildir (cins bazlı tabloya değil, sadece genel toplama eklenir — bkz. Aylık Kapanış).</div>' : '')+
     '<div class="grid grid-3" style="margin-top:16px;">'+
-      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+fmt(toplamMaliyet)+'<small>TL (Üretim: '+fmt(toplam.uretimMaliyeti)+' + Hammadde: '+fmt(toplam.hammaddeMaliyeti)+')</small></div></div>'+
+      '<div class="card"><h3>Toplam Maliyet</h3><div class="stat">'+fmt(toplamMaliyet)+'<small>TL (Üretim: '+fmt(toplam.uretimMaliyeti)+' + Hammadde: '+fmt(toplam.hammaddeMaliyeti)+(ortakIscilikToplam>0?(' + Ortak İşçilik: '+fmt(ortakIscilikToplam)):'')+')</small></div></div>'+
       '<div class="card"><h3>Toplam Satış Geliri</h3><div class="stat">'+fmt(toplam.satisGeliri)+'<small>TL</small></div></div>'+
       '<div class="card"><h3>Fark (Gelir − Maliyet)</h3><div class="stat" style="color:'+(toplamKarZarar<0?'var(--danger)':'#2ea043')+';">'+fmt(toplamKarZarar)+'<small>TL</small></div></div>'+
     '</div>'+
@@ -6120,7 +6176,9 @@ function renderCapakBilancoIcerikGercek(capakBirimVerisiCapraz, granulBirimVeris
         return r[key] || '';
       },
       ozetSatirlari: function(){
-        return [{etiket:'Toplam Üretim Maliyeti', deger:fmt(toplam.uretimMaliyeti)+' TL'}, {etiket:'Toplam Hammadde Maliyeti', deger:fmt(toplam.hammaddeMaliyeti)+' TL'}, {etiket:'Toplam Maliyet', deger:fmt(toplamMaliyet)+' TL'}, {etiket:'Toplam Satış Geliri', deger:fmt(toplam.satisGeliri)+' TL'}, {etiket:'Fark', deger:fmt(toplamKarZarar)+' TL'}];
+        return [{etiket:'Toplam Üretim Maliyeti', deger:fmt(toplam.uretimMaliyeti)+' TL'}, {etiket:'Toplam Hammadde Maliyeti', deger:fmt(toplam.hammaddeMaliyeti)+' TL'}]
+          .concat(ortakIscilikToplam>0 ? [{etiket:'Ortak İşçilik Payı', deger:fmt(ortakIscilikToplam)+' TL'}] : [])
+          .concat([{etiket:'Toplam Maliyet', deger:fmt(toplamMaliyet)+' TL'}, {etiket:'Toplam Satış Geliri', deger:fmt(toplam.satisGeliri)+' TL'}, {etiket:'Fark', deger:fmt(toplamKarZarar)+' TL'}]);
       }
     });
   });
