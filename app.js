@@ -1805,6 +1805,7 @@ function renderGenelFabrikaStokMaliyet(c){
     var icerikHtml = '';
     var birimEtiketi = 'kg';
 
+    var fasonIcerikHtml = ''; // Sadece Granül Birimi sekmesinde doldurulur — Fason İşçilik Stoğu (ayrı havuz)
     if(stokMaliyetAltSekme === 'hurda-cinsleri'){
       icerikHtml = stokMaliyetTablosuHTML(mc.hurdaCinsleri, havuzOzet.hurda, function(ad){ return capakUretimBirimiHurdaOrtalamaFiyat(ad); }, 'kg');
       mc.hurdaCinsleri.forEach(function(p){
@@ -1817,6 +1818,17 @@ function renderGenelFabrikaStokMaliyet(c){
         var stok = havuzOzet.granul[p.ad]||0, maliyet = granulCinsiKgMaliyeti(p.ad, granulVeri, capakVeri);
         duzKayitlar.push({cins:p.ad, stok:stok, maliyet:maliyet, deger:stok*maliyet});
       });
+      // Fason/İşçilik Stoğu (bedelsiz çapakla üretilen) — YUKARIDAKİ tablodan TAMAMEN AYRI bir
+      // havuzdur, normal üretimin ortalama maliyetini yanıltmasın diye kendi tablosunda gösterilir.
+      var iscilikStok = computeIscilikGranulStoku(granulVeri);
+      var iscilikToplamKg = mc.urunler.reduce(function(s,p){ return s+(iscilikStok[p.ad]||0); },0);
+      if(iscilikToplamKg > 0){
+        fasonIcerikHtml = stokMaliyetTablosuHTML(mc.urunler, iscilikStok, function(ad){ return granulCinsiIscilikStokMaliyeti(ad, granulVeri); }, 'kg');
+        mc.urunler.forEach(function(p){
+          var stok = iscilikStok[p.ad]||0, maliyet = granulCinsiIscilikStokMaliyeti(p.ad, granulVeri);
+          duzKayitlar.push({cins:p.ad+' (Fason)', stok:stok, maliyet:maliyet, deger:stok*maliyet});
+        });
+      }
     } else if(secili.birim.id === 'capak-uretim-birimi'){
       icerikHtml = stokMaliyetTablosuHTML(mc.capakCinsleri, havuzOzet.capak, function(ad){ return capakCinsiKgMaliyeti(ad, capakVeri); }, 'kg');
       mc.capakCinsleri.forEach(function(p){
@@ -1841,7 +1853,12 @@ function renderGenelFabrikaStokMaliyet(c){
         '<span>'+escapeHtml(seciliSekme.ad)+' — Stok Maliyetleri</span>'+
         '<button class="btn ghost small" id="stokm_pdf_btn">PDF Olarak Dışa Aktar</button>'+
       '</div>'+
-      '<div class="card">'+icerikHtml+'</div>';
+      '<div class="card">'+icerikHtml+'</div>'+
+      (fasonIcerikHtml ?
+        '<div class="section-title" style="margin-top:16px;">Fason İşçilik Stoğu</div>'+
+        '<div class="callout">Bu, müşterinin KENDİ hammaddesiyle (bedelsiz çapak) sizin ürettiğiniz granül stoğudur — çapak maliyeti 0'+"'"+'dır ama elektrik/su/işçilik maliyeti YİNE DE vardır. Yukarıdaki "kendi üretimim" tablosundan TAMAMEN AYRI tutulur; karıştırılırsa normal üretimin ortalama maliyeti yanıltıcı şekilde düşük görünür.</div>'+
+        '<div class="card">'+fasonIcerikHtml+'</div>'
+        : '')+'';
 
     Array.prototype.forEach.call(c.querySelectorAll('[data-stokm-alt]'), function(b){
       b.addEventListener('click', function(){
@@ -5251,21 +5268,42 @@ function granulCinsiKgMaliyeti(granulCinsi, granulBirimVerisi, capakBirimVerisi)
     toplamMaliyet += girisNakliyeliToplamMaliyet(g);
   });
 
-  // 2) Kendi ürettiğimiz Granül (Granül Birimi'nin entries'i).
-  (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi; }).forEach(function(e){
+  // 2) Kendi ürettiğimiz Granül (Granül Birimi'nin entries'i) — SADECE NORMAL (kendi hammaddemizle
+  // ürettiğimiz) üretim. Fason/İşçilik kaynaklı üretim (capakKaynagi==='iscilik', bedelsiz çapakla
+  // yapılan) BURAYA HİÇ KATILMAZ — stok miktarı zaten (uretimKatkisiEkle'de) bu ikisini ayrı
+  // havuzlarda tutuyordu, bu fonksiyon artık MALİYETTE de aynı ayrımı yapıyor (tutarlılık için).
+  // Fason üretimin kendi maliyeti ayrıca granulCinsiIscilikStokMaliyeti'nde hesaplanır.
+  (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi && e.capakKaynagi !== 'iscilik'; }).forEach(function(e){
     var kg = Number(e.kg)||0;
     if(!kg) return;
     toplamKg += kg;
     var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
     var maliyet = cst.maliyetGirildi ? cst.toplamMaliyet : 0;
     // Bu granül üretiminde kullanılan çapağın (Genel Fabrika'daki hem satın alınan hem üretilen
-    // çapak havuzundan gelen) ağırlıklı ortalama maliyeti de dahil edilir (İşçilik kaynaklıysa 0 — bedelsiz).
-    if(e.capakCinsi && Number(e.kullanilanCapak) && e.capakKaynagi !== 'iscilik'){
+    // çapak havuzundan gelen) ağırlıklı ortalama maliyeti de dahil edilir.
+    if(e.capakCinsi && Number(e.kullanilanCapak)){
       maliyet += Number(e.kullanilanCapak) * capakCinsiKgMaliyeti(e.capakCinsi, capakBirimVerisi);
     }
     toplamMaliyet += maliyet;
   });
 
+  return toplamKg ? toplamMaliyet/toplamKg : 0;
+}
+
+// Fason/İşçilik Granül Stoğu'nun (bedelsiz çapakla yapılan üretim) KENDİ ağırlıklı ortalama
+// maliyeti — granulCinsiKgMaliyeti'nden AYRI tutulur ki normal üretimin maliyetini yanıltıcı
+// şekilde düşürmesin (bedelsiz çapak, normal üretimin ortalamasını suni olarak aşağı çeker).
+// Çapak maliyeti HER ZAMAN 0'dır (bedelsiz) — ama elektrik/su/işçilik maliyeti YİNE DE vardır
+// (üretim süreci yine enerji ve işçilik harcar), bu yüzden toplam maliyet 0 DEĞİLDİR.
+function granulCinsiIscilikStokMaliyeti(granulCinsi, granulBirimVerisi){
+  var toplamKg = 0, toplamMaliyet = 0;
+  (granulBirimVerisi.entries||[]).filter(function(e){ return e.urun === granulCinsi && e.capakKaynagi === 'iscilik'; }).forEach(function(e){
+    var kg = Number(e.kg)||0;
+    if(!kg) return;
+    toplamKg += kg;
+    var cst = computeCosts(e, granulBirimVerisi, vardiyaGrupToplamKg(e, granulBirimVerisi, 'entries', 'kg'));
+    toplamMaliyet += cst.maliyetGirildi ? cst.toplamMaliyet : 0;
+  });
   return toplamKg ? toplamMaliyet/toplamKg : 0;
 }
 
