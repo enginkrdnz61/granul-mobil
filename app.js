@@ -1609,6 +1609,21 @@ function tumUrunGruplariBirlesik(veri){
   return gruplar;
 }
 // Yukarıdakinin düz (gruplanmamış) hâli — sadece "toplamda hiç ürün var mı" gibi kontroller için.
+// Yukarıdakinin AYNISI ama her grubun sabit bir "id"si de var — Kayıtlar sekmesindeki alt-sekme
+// seçimini (kayitlarAltSekme state'i) kategori YENİDEN ADLANDIRILSA bile KORUYABİLMEK için gerekli
+// ("baslik" değişebilir ama "id" sabit kalır: core kategoriler için 'hurda'/'capak'/'granul', ek
+// kategoriler için kendi eklendiklerinde atanan id'leri).
+function tumUrunGruplariIdli(veri){
+  var gruplar = [];
+  if(veri.cinsAktif.hurda && (veri.hurdaCinsleri||[]).length>0) gruplar.push({id:'hurda', baslik: veri.cinsBasliklari.hurda, ogeler: veri.hurdaCinsleri});
+  if(veri.cinsAktif.capak && (veri.capakCinsleri||[]).length>0) gruplar.push({id:'capak', baslik: veri.cinsBasliklari.capak, ogeler: veri.capakCinsleri});
+  if(veri.cinsAktif.granul && (veri.urunler||[]).length>0) gruplar.push({id:'granul', baslik: veri.cinsBasliklari.granul, ogeler: veri.urunler});
+  (veri.ekKategoriler||[]).forEach(function(ek){
+    if((ek.ogeler||[]).length>0) gruplar.push({id:ek.id, baslik: ek.baslik, ogeler: ek.ogeler});
+  });
+  return gruplar;
+}
+
 function tumUrunlerBirlesik(veri){
   var liste = [];
   tumUrunGruplariBirlesik(veri).forEach(function(g){ liste = liste.concat(g.ogeler); });
@@ -3541,8 +3556,8 @@ function renderSatinAlmaAylikIcerik(month){
 // + ürün gramajına göre otomatik hesaplanan hammadde tüketimi. Granül'ün elektrik/işçilik/Agromel/
 // Çapak Cinsi mantığıyla HİÇ ilgisi yok — kasıtlı olarak çok daha basit bir model.
 // Veri modeli (bd.entries, mevcut alanlar yeniden kullanılıyor): kg = Üretilen Adet,
-// fireAdedi = Fire Adedi (adet, YÜZDE DEĞİL), kullanilanCapak = otomatik hesaplanan kg
-// (Üretilen Adet + Fire Adedi) × Ürün Gramajı. capakCinsi kullanılmaz (boş bırakılır).
+// fireAdedi = Fire Adedi (adet, YÜZDE DEĞİL — sadece takip amaçlı, hammadde hesabını ETKİLEMEZ),
+// kullanilanCapak = otomatik hesaplanan kg (Üretilen Adet × Ürün Gramajı). capakCinsi kullanılmaz (boş bırakılır).
 // ============================================================
 function renderBidonUretimFormHTML(editEntry){
   var isEdit = !!editEntry;
@@ -3587,7 +3602,7 @@ function renderBidonUretimFormHTML(editEntry){
         '<div class="field" id="bu_hammadde_alani" style="display:'+(girdiTuruBaslangic==='hammadde'?'block':'none')+';"><label>Kullanılan Hammadde Cinsi</label><select id="bu_hammadde">'+hammaddeOptions+'</select></div>'+
         '<div class="field" id="bu_granul_alani" style="display:'+(girdiTuruBaslangic==='granul'?'block':'none')+';"><label>Kullanılan Granül Cinsi</label><select id="bu_granul">'+granulOptions+'</select></div>')+
       '<div class="field"><label>Kullanılan Miktar (kg) — otomatik hesaplanır</label><input type="number" id="bu_kg" step="0.01" disabled style="opacity:.75;"></div>'+
-      '<div class="note" style="margin:-6px 0 13px;">Kullanılan miktar = (Üretilen Adet + Fire Adedi) × Ürün Gramajı — bidon tipinin Parametreler sekmesinde tanımlı gramajına göre otomatik hesaplanır, elle değiştirilemez. Girdi seçilirse, bu miktar seçilen kaynağın (hammadde ya da Genel Fabrika Granül) stoğundan düşer.</div>'+
+      '<div class="note" style="margin:-6px 0 13px;">Kullanılan miktar = Üretilen Adet × Ürün Gramajı — bidon tipinin Parametreler sekmesinde tanımlı gramajına göre otomatik hesaplanır, elle değiştirilemez. Fire Adedi bu hesaba DAHİL DEĞİLDİR (sadece takip amaçlıdır, Üretilen Adet zaten toplam üretimi ifade eder). Girdi seçilirse, bu miktar seçilen kaynağın (hammadde ya da Genel Fabrika Granül) stoğundan düşer.</div>'+
       '<div class="field"><label>Not (opsiyonel)</label><textarea id="bu_not" rows="2">'+(isEdit?escapeHtml(editEntry.notlar||''):'')+'</textarea></div>'+
       '<button class="btn" id="bu_save">'+(isEdit?'Kaydı Güncelle':'Kaydı Kaydet')+'</button>'+
       (isEdit ? ' <button class="btn ghost" id="bu_cancel">Vazgeç</button>' : '')+
@@ -3631,10 +3646,12 @@ function initBidonUretimForm(editEntry){
   }
   function hesapla(){
     var adet = Number(adetInput.value)||0;
-    var fire = Number(fireInput.value)||0;
     var gramajGram = gramajBul(); // ürün başına gram
-    var kullanilanKg = (adet+fire) * gramajGram / 1000;
-    kgInput.value = (adet||fire) ? kullanilanKg.toFixed(2) : '';
+    // Fire Adedi, Üretilen Adet'e EKLENMEZ — sadece takip/bilgi amaçlı bir alandır. Hammadde
+    // tüketimi TAMAMEN "Üretilen Adet"e göre hesaplanır (Üretilen Adet, fire dahil TOPLAM üretimi
+    // temsil eder; Fire Adedi, bunun ne kadarının bozuk çıktığını AYRICA gösterir).
+    var kullanilanKg = adet * gramajGram / 1000;
+    kgInput.value = adet ? kullanilanKg.toFixed(2) : '';
   }
   urunSel.addEventListener('change', hesapla);
   adetInput.addEventListener('input', hesapla);
@@ -3946,10 +3963,30 @@ function renderKayitlar(c){
 
 function renderKayitlarAltSekmeler(){
   var box = document.getElementById('kayitlar_alt_sekme');
-  // "Diğer birim" (örn. Şişirme Birimi) Granül/Çapak Üretim Birimi'nin MERKEZİ cins listesini
-  // değil, kendi izole (STATE.birimVeri) cins başlıklarını/aktifliğini kullanır.
-  var basliklar = digerBirimMi() ? STATE.birimVeri.cinsBasliklari : STATE.merkeziCinsler.cinsBasliklari;
-  var aktif = digerBirimMi() ? STATE.birimVeri.cinsAktif : STATE.merkeziCinsler.cinsAktif;
+  // "Diğer birim" (örn. Şişirme Birimi): Parametreler sekmesindeki "Ürün Cinsleri (Bu Birime
+  // Özel)" ile TAM SENKRON — o an aktif olan HER kategori (çekirdek + kullanıcının eklediği
+  // sınırsız sayıda ek kategori) için AYRI bir "[Kategori] Kayıtları" alt-sekmesi otomatik açılır.
+  // Yeni bir kategori eklendiğinde/adı değiştirildiğinde/silindiğinde bu liste HEMEN yansır.
+  if(digerBirimMi()){
+    var gruplar = tumUrunGruplariIdli(STATE.birimVeri);
+    var sekmeler = gruplar.map(function(g){ return {id:g.id, label:g.baslik+' Kayıtları'}; });
+    if(sekmeler.length > 0 && !sekmeler.some(function(s){ return s.id === kayitlarAltSekme; })){
+      kayitlarAltSekme = sekmeler[0].id;
+    }
+    box.innerHTML = sekmeler.map(function(s){
+      return '<button class="stage-btn '+(kayitlarAltSekme===s.id?'active':'')+'" data-kayit-sekme="'+s.id+'">'+escapeHtml(s.label)+'</button>';
+    }).join('') || '<div class="note">Bu birimde henüz tanımlı bir ürün kategorisi yok — Parametreler sekmesinden ekleyebilirsiniz.</div>';
+    Array.prototype.forEach.call(box.querySelectorAll('button'), function(b){
+      b.addEventListener('click', function(){
+        kayitlarAltSekme = b.dataset.kayitSekme;
+        renderKayitlarAltSekmeler();
+        renderKayitlarIcerik();
+      });
+    });
+    return;
+  }
+  var basliklar = STATE.merkeziCinsler.cinsBasliklari;
+  var aktif = STATE.merkeziCinsler.cinsAktif;
   // Granül Birimi sadece kendi ürettiği Granül'ün kayıtlarıyla ilgilenir; Çapak Üretim Birimi
   // hem tükettiği Hurda'nın hem de ürettiği Çapak'ın kayıtlarıyla ilgilenir.
   var izinliKategoriler = BIRIM_ILGILI_KATEGORILER[STATE.aktifBirimId] || ['hurda','capak','granul'];
@@ -3974,13 +4011,22 @@ function renderKayitlarAltSekmeler(){
 
 function renderKayitlarIcerik(){
   var c = document.getElementById('kayitlar_icerik'); if(!c) return;
-  var aktif = digerBirimMi() ? STATE.birimVeri.cinsAktif : STATE.merkeziCinsler.cinsAktif;
+  // "Diğer birim": seçili alt-sekmenin id'sine karşılık gelen kategori grubunu bulup, o gruptaki
+  // ürünlere ait KENDİ üretim kayıtlarını (Granül/Çapak'ın kayıtlarıyla HİÇ karışmadan) gösterir.
+  if(digerBirimMi()){
+    var gruplar = tumUrunGruplariIdli(STATE.birimVeri);
+    var grup = gruplar.find(function(g){ return g.id === kayitlarAltSekme; });
+    if(grup) return renderBidonKayitlari(c, grup);
+    c.innerHTML = '<div class="callout warn">Bu birimde şu an aktif bir kategori yok. <a id="ky_go_param" style="color:var(--amber); cursor:pointer;">Parametreler</a> sayfasından bir kategori açabilirsiniz.</div>';
+    var lnk2 = document.getElementById('ky_go_param');
+    if(lnk2) lnk2.addEventListener('click', genelFabrikaParametrelerineGit);
+    return;
+  }
+  var aktif = STATE.merkeziCinsler.cinsAktif;
   var izinliKategoriler = BIRIM_ILGILI_KATEGORILER[STATE.aktifBirimId] || ['hurda','capak','granul'];
   if(kayitlarAltSekme==='hurda' && aktif.hurda && izinliKategoriler.indexOf('hurda') !== -1) return renderHurdaKayitlari(c);
   if(kayitlarAltSekme==='capak' && aktif.capak && izinliKategoriler.indexOf('capak') !== -1) return renderCapakKayitlari(c);
-  if(kayitlarAltSekme==='granul' && aktif.granul && izinliKategoriler.indexOf('granul') !== -1){
-    return digerBirimMi() ? renderBidonKayitlari(c) : renderGranulKayitlari(c);
-  }
+  if(kayitlarAltSekme==='granul' && aktif.granul && izinliKategoriler.indexOf('granul') !== -1) return renderGranulKayitlari(c);
   c.innerHTML = '<div class="callout warn">Bu birimde şu an aktif bir kategori yok. <a id="ky_go_param" style="color:var(--amber); cursor:pointer;">Parametreler</a> sayfasından bir kategori açabilirsiniz.</div>';
   var lnk = document.getElementById('ky_go_param');
   if(lnk) lnk.addEventListener('click', genelFabrikaParametrelerineGit);
@@ -4164,17 +4210,22 @@ function renderCapakKayitlari(c){
 // ---------- Kayıtlar > Granül Kayıtları (üretim: filtre + PDF; artı satın alınan granül) ----------
 // "Diğer birim" (örn. Şişirme Birimi) için basitleştirilmiş Kayıtlar tablosu — Granül'ün
 // elektrik/işçilik maliyet sütunlarını (bu birimlerde anlamsız) İÇERMEZ.
-function renderBidonKayitlari(c){
-  var basliklar = STATE.birimVeri.cinsBasliklari;
-  var products = tumUrunlerBirlesik(STATE.birimVeri).map(function(p){ return p.ad; });
+// grup: {id, baslik, ogeler} — Parametreler'deki "Ürün Cinsleri (Bu Birime Özel)" tablosundaki
+// TEK BİR kategori (çekirdek ya da kullanıcının eklediği). Bu ekran SADECE o kategorideki
+// ürünlere ait kayıtları gösterir — başka bir kategorinin (ya da Granül/Çapak Üretim Birimi'nin)
+// kayıtları HİÇ karışmaz. "Kayıtları" başlığı, o kategorinin GÜNCEL adına göre otomatik oluşur.
+function renderBidonKayitlari(c, grup){
+  var products = (grup.ogeler||[]).map(function(p){ return p.ad; });
+  var productSet = {}; products.forEach(function(p){ productSet[p] = true; });
+  var tumEntries = STATE.birimVeri.entries.filter(function(e){ return productSet[e.urun]; });
   c.innerHTML =
     '<div class="section-title" style="margin-top:0; display:flex; align-items:center; justify-content:space-between;">'+
-      '<span>Bidon Üretimi Kayıtları</span><button class="btn ghost small" id="bu_pdf_btn">PDF Olarak Dışa Aktar</button>'+
+      '<span>'+escapeHtml(grup.baslik)+' Kayıtları</span><button class="btn ghost small" id="bu_pdf_btn">PDF Olarak Dışa Aktar</button>'+
     '</div>'+
     '<div class="toolbar">'+
       '<div class="field"><label>Başlangıç</label><input type="date" id="filt_start"></div>'+
       '<div class="field"><label>Bitiş</label><input type="date" id="filt_end"></div>'+
-      '<div class="field"><label>Bidon Tipi</label><select id="filt_urun"><option value="">Tümü</option>'+
+      '<div class="field"><label>'+escapeHtml(grup.baslik)+' Tipi</label><select id="filt_urun"><option value="">Tümü</option>'+
         products.map(function(p){ return '<option value="'+escapeHtml(p)+'">'+escapeHtml(p)+'</option>'; }).join('')+
       '</select></div>'+
       '<button class="btn ghost" id="filt_refresh">Yenile (Filtreleri Temizle + Veriyi Tazele)</button>'+
@@ -4183,14 +4234,14 @@ function renderBidonKayitlari(c){
 
   (document.getElementById('bu_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
     pdfDisaAktarPenceresiAc({
-      baslik: aktifBirimAdi()+' — Bidon Üretimi Kayıtları',
+      baslik: aktifBirimAdi()+' — '+grup.baslik+' Kayıtları',
       tarihAlani: 'tarih',
       sutunlar: [
-        {key:'tarih', label:'Tarih'}, {key:'vardiya', label:'Vardiya'}, {key:'urun', label:'Bidon Tipi'},
+        {key:'tarih', label:'Tarih'}, {key:'vardiya', label:'Vardiya'}, {key:'urun', label:grup.baslik+' Tipi'},
         {key:'kg', label:'Üretilen Adet'}, {key:'fireAdedi', label:'Fire Adedi'}, {key:'kullanilanCapak', label:'Kullanılan (kg)'},
         {key:'notlar', label:'Not'}, {key:'girenAd', label:'Giren'}
       ],
-      kayitlarGetir: function(){ return STATE.birimVeri.entries; },
+      kayitlarGetir: function(){ return tumEntries; },
       satirDegeri: function(e, key){
         if(key==='vardiya') return e.vardiya==='gece'?'Gece':'Gündüz';
         if(key==='kg') return fmt(e.kg)+' adet';
@@ -4210,7 +4261,7 @@ function renderBidonKayitlari(c){
     var s = (document.getElementById('filt_start')||{value:''}).value;
     var e = (document.getElementById('filt_end')||{value:''}).value;
     var u = (document.getElementById('filt_urun')||{value:''}).value;
-    var list = STATE.birimVeri.entries;
+    var list = tumEntries;
     if(s) list = list.filter(function(x){ return x.tarih>=s; });
     if(e) list = list.filter(function(x){ return x.tarih<=e; });
     if(u) list = list.filter(function(x){ return x.urun===u; });
@@ -4230,7 +4281,9 @@ function renderBidonKayitlari(c){
           var aciklama = 'Bidon üretim kaydı silme: '+(entry?entry.urun+', '+fmt(entry.kg)+' adet ('+tarihGoster(entry.tarih)+')':'');
           mutasyonCagirUretim('deleteEntry', [STATE.aktifBirimId, b.dataset.buDel], aciklama, aktifBirimAdi(), false, function(entries, kuyruga){
             if(kuyruga) return;
-            STATE.birimVeri.entries = entries; applyFilter();
+            STATE.birimVeri.entries = entries;
+            tumEntries = STATE.birimVeri.entries.filter(function(e){ return productSet[e.urun]; });
+            applyFilter();
           });
         });
       });
