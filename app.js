@@ -7968,7 +7968,10 @@ function renderCinsAltSekmeler(kaynakId){
     coreTanimlari = coreTanimlari.filter(function(t){ return izinliKategoriler.indexOf(t.id) !== -1; });
   }
   var acikOlanlar = coreTanimlari.filter(function(s){ return aktif[s.id]; });
-  var kapaliOlanlar = coreTanimlari.filter(function(s){ return !aktif[s.id]; });
+  // "Kalıcı silinmiş" (cinsKaliciSilindi=true) kategoriler, "Kapatılmış kategoriler / Tekrar Aç"
+  // listesinde ARTIK gösterilmez — geri dönüşü olmayan bir işlemdir.
+  var kaliciSilindi = veri.cinsKaliciSilindi || {};
+  var kapaliOlanlar = coreTanimlari.filter(function(s){ return !aktif[s.id] && !kaliciSilindi[s.id]; });
   var sekmeler = acikOlanlar.concat((veri.ekKategoriler||[]).map(function(k){ return {id:k.id, label:k.baslik}; }));
 
   if(!CINS_BILESEN_SEKME[kaynakId] || (sekmeler.length > 0 && !sekmeler.some(function(s){ return s.id === CINS_BILESEN_SEKME[kaynakId]; }))){
@@ -7996,7 +7999,10 @@ function renderCinsAltSekmeler(kaynakId){
     } else {
       kapaliBox.innerHTML = '<div class="note" style="margin:10px 0 4px;">Kapatılmış kategoriler (verileri saklı kalır):</div>'+
         kapaliOlanlar.map(function(s){
-          return '<button class="btn ghost small" data-cins-ac="'+s.id+'" style="margin:0 6px 6px 0;">'+escapeHtml(s.label)+' — Tekrar Aç</button>';
+          return '<span style="display:inline-flex; align-items:center; gap:4px; margin:0 6px 6px 0;">'+
+            '<button class="btn ghost small" data-cins-ac="'+s.id+'">'+escapeHtml(s.label)+' — Tekrar Aç</button>'+
+            '<button class="btn danger small" data-cins-kalici-sil="'+s.id+'" title="Bu kategoriyi kalıcı olarak sil — bir daha Tekrar Aç seçeneğinde görünmez">Kalıcı Sil</button>'+
+          '</span>';
         }).join('');
       Array.prototype.forEach.call(kapaliBox.querySelectorAll('[data-cins-ac]'), function(b){
         b.addEventListener('click', function(){
@@ -8005,6 +8011,19 @@ function renderCinsAltSekmeler(kaynakId){
             CINS_BILESEN_SEKME[kaynakId] = b.dataset.cinsAc;
             renderCinsAltSekmeler(kaynakId); renderCinsIcerik(kaynakId);
           }).catch(function(err){ alert(err.message); });
+        });
+      });
+      Array.prototype.forEach.call(kapaliBox.querySelectorAll('[data-cins-kalici-sil]'), function(b){
+        b.addEventListener('click', function(){
+          var id = b.dataset.cinsKaliciSil;
+          var kat = coreTanimlari.find(function(t){ return t.id === id; });
+          showConfirm('"'+(kat?kat.label:id)+'" kategorisini KALICI olarak silmek istediğinize emin misiniz? Bu işlem GERİ ALINAMAZ — kategori bir daha "Tekrar Aç" seçeneğinde görünmeyecek. (İçindeki geçmiş kayıtlar silinmez, sadece bu kategoriyi tekrar açma seçeneği kalıcı olarak kaldırılır.)', 'Kalıcı Sil', function(){
+            window.api.setCinsKaliciSil(kaynakId, id).then(function(kaliciSilindiYeni){
+              veri.cinsKaliciSilindi = kaliciSilindiYeni;
+              renderCinsAltSekmeler(kaynakId); renderCinsIcerik(kaynakId);
+              showToast('Kategori kalıcı olarak silindi.');
+            }).catch(function(err){ alert(err.message); });
+          });
         });
       });
     }

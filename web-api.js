@@ -126,7 +126,7 @@
     'deleteUnvan', 'deleteUrun', 'emptyCopKutusu', 'markGeriBildirimDurum', 'markMesajlarOkundu', 'reorderBirim',
     'reorderCapakCinsi', 'reorderEkKategori', 'reorderEkKategoriOge', 'reorderHammaddeCinsi', 'reorderHurdaCinsi',
     'reorderUrun', 'restoreCop', 'restoreDailyBackup', 'saveAylikKapanis', 'saveAylikFiyat', 'saveSettings', 'sendMesaj',
-    'setAnaUretimTuru', 'setCinsAktif', 'setSatinAlimAktif', 'updateBirimAdi', 'updateCapakCinsi',
+    'setAnaUretimTuru', 'setCinsAktif', 'setCinsKaliciSil', 'setSatinAlimAktif', 'updateBirimAdi', 'updateCapakCinsi',
     'updateCapakCinsiGramaj', 'updateCapakGirisi', 'updateCapakSatisi', 'updateCapakUretimi', 'updateCariHareket',
     'updateCinsBasligi', 'updateEkKategoriBaslik', 'updateEkKategoriOge', 'updateEkKategoriOgeGramaj',
     'updateEkParametre', 'updateEntry', 'updateGeriBildirim', 'updateGranulGirisi', 'updateHammaddeCinsi',
