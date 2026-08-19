@@ -2976,6 +2976,7 @@ function ortakIscilikOranHaritasi(entries, tarihAlaniAdi, granulVeri, capakVeri,
 // maaş/225*süre formülüyle TUTARLI) satırın KENDİ SÜRESİYLE (gosterilenSure) çarpılarak
 // maliyetine EKLENİR — Panel/Bilanço ile TUTARLI bir "gerçek" toplam maliyet gösterilsin diye.
 function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
+  var secimModu = withActions && isAdmin() && !mobilSaltOkunurMu(); // toplu seçim/silme SADECE Yönetici'ye özeldir, mobil salt-okunur görünümde hiç gösterilmez
   var rows = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(function(e){
     var cst = computeCosts(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
     var ortakOran = (ortakOranHaritasi && ortakOranHaritasi[e.tarih.slice(0,7)]) || 0; // TL/saat
@@ -2986,6 +2987,7 @@ function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
       ? '<td>'+fmt(cst.toplamElektrik)+'</td><td>'+fmt(cst.toplamSu)+'</td><td>'+fmt(cst.toplamIscilik + ekPay)+'</td><td>'+fmt(gercekToplam)+'</td><td>'+fmt(gercekBirim)+'</td>'
       : '<td colspan="5" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
     return '<tr>'+
+      (secimModu ? '<td><input type="checkbox" class="satir-sec" data-sec-id="'+e.id+'"></td>' : '')+
       '<td class="txt">'+escapeHtml(tarihGoster(e.tarih))+'</td>'+
       '<td class="txt"><span class="tag '+tagClassFor(e.urun)+'">'+escapeHtml(e.urun)+'</span></td>'+
       '<td class="txt"><span class="tag '+(e.vardiya==='gece'?'gece':'gunduz')+'">'+(e.vardiya==='gece'?'Gece':'Gündüz')+'</span></td>'+
@@ -3004,14 +3006,53 @@ function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
     '</tr>';
   }).join('');
   return '<table><thead><tr>'+
+    (secimModu ? '<th><input type="checkbox" id="satir_tumunu_sec" title="Tümünü Seç"></th>' : '')+
     '<th>Tarih</th><th>Ürün</th><th>Vardiya</th><th>Kg</th><th>Çapak (kg)</th><th>Agromel</th><th>Süre (sa)</th><th>Verim (kg/sa)</th><th>Elektrik (TL)</th><th>Su (TL)</th><th>İşçilik (TL)</th><th>Toplam (TL)</th><th>TL/kg</th><th>Giren</th>'+
     (showNotes?'<th>Not</th>':'')+(withActions?'<th></th>':'')+
     '</tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
-// ============================================================
-// YENİ KAYIT
-// ============================================================
+// Toplu seçim/silme çubuğu — SADECE Yönetici'ye özeldir (renderEntryTable ve benzerleri, checkbox
+// sütununu zaten sadece isAdmin() ise ekliyor). tabloBox: checkbox'ların bulunduğu tablo elementi.
+// barBox: "N kayıt seçildi / Seçilenleri Sil" çubuğunun render edileceği (tablonun ÜSTÜNDEKİ) boş
+// bir div. silSiraliFn(id, cb): TEK bir kaydı silen fonksiyon — cb() silme bittiğinde çağrılır.
+// hepsiTamamlaninca: tüm seçili kayıtlar silindikten sonra çağrılır (genelde tabloyu yeniden çizer).
+function topluSecimBarKur(barBox, tabloBox, silSiraliFn, hepsiTamamlaninca){
+  if(!barBox || !tabloBox) return;
+  function guncelle(){
+    var checkedler = tabloBox.querySelectorAll('.satir-sec:checked');
+    var sayi = checkedler.length;
+    if(sayi === 0){ barBox.innerHTML = ''; return; }
+    barBox.innerHTML = '<div class="callout warn" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">'+
+      '<span><b>'+sayi+'</b> kayıt seçildi.</span>'+
+      '<button class="btn danger small" id="toplu_sil_btn">Seçilenleri Sil</button>'+
+    '</div>';
+    document.getElementById('toplu_sil_btn').addEventListener('click', function(){
+      var idler = Array.prototype.map.call(tabloBox.querySelectorAll('.satir-sec:checked'), function(cb){ return cb.dataset.secId; });
+      showConfirm(idler.length+' kaydı silmek istediğinize emin misiniz? (Her biri çöp kutusuna tek tek düşer, oradan geri getirilebilir.)', 'Hepsini Sil', function(){
+        var btn = document.getElementById('toplu_sil_btn');
+        if(btn){ btn.disabled = true; btn.textContent = 'Siliniyor…'; }
+        var i = 0;
+        function siraylaSil(){
+          if(i >= idler.length){ hepsiTamamlaninca(); return; }
+          silSiraliFn(idler[i], function(){ i++; siraylaSil(); });
+        }
+        siraylaSil();
+      });
+    });
+  }
+  var tumSec = document.getElementById('satir_tumunu_sec');
+  if(tumSec) tumSec.addEventListener('change', function(){
+    Array.prototype.forEach.call(tabloBox.querySelectorAll('.satir-sec'), function(cb){ cb.checked = tumSec.checked; });
+    guncelle();
+  });
+  Array.prototype.forEach.call(tabloBox.querySelectorAll('.satir-sec'), function(cb){
+    cb.addEventListener('change', guncelle);
+  });
+  guncelle();
+}
+
+
 // Çapak Üretim Kaydı formu — hem Yeni Kayıt sayfasında (üretim girişi burada yapılır) kullanılır.
 function renderCapakUretimFormHTML(editEntry){
   var isEdit = !!editEntry;
@@ -4340,6 +4381,7 @@ function renderGranulKayitlari(c){
       '<div style="flex:1;"></div>'+
       '<button class="btn" id="pdf_export">PDF Olarak Dışa Aktar</button>'+
     '</div>'+
+    '<div id="toplu_sil_bar"></div>'+
     '<div class="card"><div id="kayit_table"></div></div>'+
     '<div class="section-title">Satın Alınan Granül</div>'+
     '<div id="gk_satinalim_liste"></div>';
@@ -4355,6 +4397,15 @@ function renderGranulKayitlari(c){
     currentFilteredList = list;
     var box = document.getElementById('kayit_table'); if(!box) return;
     box.innerHTML = list.length===0 ? '<div class="empty"><b>Kayıt bulunamadı</b>Filtreleri temizleyin ya da yeni kayıt ekleyin.</div>' : renderEntryTable(list, true, true, ortakOranCache);
+    var barBox = document.getElementById('toplu_sil_bar');
+    if(isAdmin() && list.length>0){
+      topluSecimBarKur(barBox, box, function(id, cb){
+        mutasyonCagirUretim('deleteEntry', [STATE.aktifBirimId, id], 'Toplu silme: Granül kaydı', aktifBirimAdi(), false, function(entries, kuyruga){
+          if(!kuyruga) STATE.birimVeri.entries = entries;
+          cb();
+        });
+      }, function(){ applyFilter(); });
+    } else if(barBox){ barBox.innerHTML = ''; }
     Array.prototype.forEach.call(box.querySelectorAll('[data-edit]'), function(b){
       b.addEventListener('click', function(){
         var entry = STATE.birimVeri.entries.find(function(x){ return x.id===b.dataset.edit; });
