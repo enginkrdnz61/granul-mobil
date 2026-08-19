@@ -468,9 +468,13 @@ function exportBasitListToPDF(list, raporBasligi, baslikAraligi, ozetSatirlari, 
 // ekranBasliklari/ekranSatirHTML: ekrandaki tablo için (silme butonu dahil olabilir)
 // pdfBasliklari/pdfSatirHTML: PDF çıktısı için (silme butonu YOK, ayrı ve sabit satır oluşturucu)
 // satirlarSonrasi(kutu, list): her çizimden sonra çalışır (silme butonlarını bağlamak için)
-function renderBasitFiltreliListe(kutuId, kayitlarGetir, cinsAlan, miktarAlan, cinsSecenekleri, raporBasligi, ekranBasliklari, ekranSatirHTML, pdfBasliklari, pdfSatirHTML, satirlarSonrasi){
+// tekilSilFn (opsiyonel, son parametre): function(id, cb) — TEK bir kaydı siler, cb() silme
+// bittiğinde çağrılır. Verilirse VE kullanıcı Yönetici ise (mobil salt-okunur DEĞİLSE), tablo
+// başına checkbox sütunu + "Tümünü Seç" + toplu silme çubuğu otomatik eklenir.
+function renderBasitFiltreliListe(kutuId, kayitlarGetir, cinsAlan, miktarAlan, cinsSecenekleri, raporBasligi, ekranBasliklari, ekranSatirHTML, pdfBasliklari, pdfSatirHTML, satirlarSonrasi, tekilSilFn){
   var kutu = document.getElementById(kutuId);
   var mevcutFiltreliListe = [];
+  var secimModu = !!tekilSilFn && isAdmin() && !mobilSaltOkunurMu();
   kutu.innerHTML =
     '<div class="toolbar">'+
       '<div class="field"><label>Başlangıç</label><input type="date" id="'+kutuId+'_start"></div>'+
@@ -487,6 +491,7 @@ function renderBasitFiltreliListe(kutuId, kayitlarGetir, cinsAlan, miktarAlan, c
       '<div style="flex:1;"></div>'+
       '<button class="btn" id="'+kutuId+'_pdf">PDF Olarak Dışa Aktar</button>'+
     '</div>'+
+    (secimModu ? '<div id="'+kutuId+'_toplu_sil_bar"></div>' : '')+
     '<div class="card" style="margin-top:12px;"><div id="'+kutuId+'_tablo"></div></div>';
 
   function uygula(){
@@ -500,10 +505,27 @@ function renderBasitFiltreliListe(kutuId, kayitlarGetir, cinsAlan, miktarAlan, c
     mevcutFiltreliListe = list;
     var tabloBox = document.getElementById(kutuId+'_tablo');
     if(!tabloBox) return;
-    if(list.length===0){ tabloBox.innerHTML = '<div class="empty"><b>Kayıt bulunamadı</b>Filtreleri temizleyin ya da yeni kayıt ekleyin.</div>'; if(satirlarSonrasi) satirlarSonrasi(tabloBox, list); return; }
-    tabloBox.innerHTML = '<table><thead><tr>'+ekranBasliklari.map(function(b){ return '<th>'+escapeHtml(b)+'</th>'; }).join('')+'</tr></thead><tbody>'+
-      list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(ekranSatirHTML).join('')+
+    var barBox = document.getElementById(kutuId+'_toplu_sil_bar');
+    if(list.length===0){
+      tabloBox.innerHTML = '<div class="empty"><b>Kayıt bulunamadı</b>Filtreleri temizleyin ya da yeni kayıt ekleyin.</div>';
+      if(barBox) barBox.innerHTML = '';
+      if(satirlarSonrasi) satirlarSonrasi(tabloBox, list);
+      return;
+    }
+    var siraliListe = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); });
+    tabloBox.innerHTML = '<table><thead><tr>'+
+      (secimModu ? '<th><input type="checkbox" class="satir-tumunu-sec" title="Tümünü Seç"></th>' : '')+
+      ekranBasliklari.map(function(b){ return '<th>'+escapeHtml(b)+'</th>'; }).join('')+'</tr></thead><tbody>'+
+      siraliListe.map(function(item){
+        var satirHtml = ekranSatirHTML(item);
+        // ekranSatirHTML her zaman düz '<tr>' (class'sız) ile başlar — checkbox'ı hemen ardına ekliyoruz.
+        if(secimModu) satirHtml = satirHtml.replace('<tr>', '<tr><td><input type="checkbox" class="satir-sec" data-sec-id="'+item.id+'"></td>');
+        return satirHtml;
+      }).join('')+
     '</tbody></table>';
+    if(secimModu && barBox){
+      topluSecimBarKur(barBox, tabloBox, tekilSilFn, function(){ uygula(); });
+    }
     if(satirlarSonrasi) satirlarSonrasi(tabloBox, list);
   }
   document.getElementById(kutuId+'_start').addEventListener('input', uygula);
@@ -3006,7 +3028,7 @@ function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
     '</tr>';
   }).join('');
   return '<table><thead><tr>'+
-    (secimModu ? '<th><input type="checkbox" id="satir_tumunu_sec" title="Tümünü Seç"></th>' : '')+
+    (secimModu ? '<th><input type="checkbox" class="satir-tumunu-sec" title="Tümünü Seç"></th>' : '')+
     '<th>Tarih</th><th>Ürün</th><th>Vardiya</th><th>Kg</th><th>Çapak (kg)</th><th>Agromel</th><th>Süre (sa)</th><th>Verim (kg/sa)</th><th>Elektrik (TL)</th><th>Su (TL)</th><th>İşçilik (TL)</th><th>Toplam (TL)</th><th>TL/kg</th><th>Giren</th>'+
     (showNotes?'<th>Not</th>':'')+(withActions?'<th></th>':'')+
     '</tr></thead><tbody>'+rows+'</tbody></table>';
@@ -3017,6 +3039,9 @@ function renderEntryTable(list, withActions, showNotes, ortakOranHaritasi){
 // barBox: "N kayıt seçildi / Seçilenleri Sil" çubuğunun render edileceği (tablonun ÜSTÜNDEKİ) boş
 // bir div. silSiraliFn(id, cb): TEK bir kaydı silen fonksiyon — cb() silme bittiğinde çağrılır.
 // hepsiTamamlaninca: tüm seçili kayıtlar silindikten sonra çağrılır (genelde tabloyu yeniden çizer).
+// ÖNEMLİ: "Tümünü Seç" checkbox'ı ID DEĞİL "satir-tumunu-sec" CLASS'ıyla aranır — aynı sayfada
+// birden fazla tablo (örn. Çapak Üretim + Satın Alma) aynı anda render edilebildiği için, sabit
+// bir ID kullanmak çakışmaya (ikinci tablonun checkbox'ının hiç çalışmamasına) yol açardı.
 function topluSecimBarKur(barBox, tabloBox, silSiraliFn, hepsiTamamlaninca){
   if(!barBox || !tabloBox) return;
   function guncelle(){
@@ -3025,12 +3050,12 @@ function topluSecimBarKur(barBox, tabloBox, silSiraliFn, hepsiTamamlaninca){
     if(sayi === 0){ barBox.innerHTML = ''; return; }
     barBox.innerHTML = '<div class="callout warn" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">'+
       '<span><b>'+sayi+'</b> kayıt seçildi.</span>'+
-      '<button class="btn danger small" id="toplu_sil_btn">Seçilenleri Sil</button>'+
+      '<button class="btn danger small toplu-sil-btn">Seçilenleri Sil</button>'+
     '</div>';
-    document.getElementById('toplu_sil_btn').addEventListener('click', function(){
+    barBox.querySelector('.toplu-sil-btn').addEventListener('click', function(){
       var idler = Array.prototype.map.call(tabloBox.querySelectorAll('.satir-sec:checked'), function(cb){ return cb.dataset.secId; });
       showConfirm(idler.length+' kaydı silmek istediğinize emin misiniz? (Her biri çöp kutusuna tek tek düşer, oradan geri getirilebilir.)', 'Hepsini Sil', function(){
-        var btn = document.getElementById('toplu_sil_btn');
+        var btn = barBox.querySelector('.toplu-sil-btn');
         if(btn){ btn.disabled = true; btn.textContent = 'Siliniyor…'; }
         var i = 0;
         function siraylaSil(){
@@ -3041,7 +3066,7 @@ function topluSecimBarKur(barBox, tabloBox, silSiraliFn, hepsiTamamlaninca){
       });
     });
   }
-  var tumSec = document.getElementById('satir_tumunu_sec');
+  var tumSec = tabloBox.querySelector('.satir-tumunu-sec');
   if(tumSec) tumSec.addEventListener('change', function(){
     Array.prototype.forEach.call(tabloBox.querySelectorAll('.satir-sec'), function(cb){ cb.checked = tumSec.checked; });
     guncelle();
@@ -4132,6 +4157,12 @@ function renderHurdaKayitlari(c){
           });
         });
       });
+    },
+    function(id, cb){
+      mutasyonCagirUretim('deleteHurdaGirisi', ['merkezi', id], 'Toplu silme: '+basliklar.hurda+' satın alma', 'Satın Alma', false, function(liste, kuyruga){
+        if(!kuyruga) STATE.merkeziSatinAlmalar.hurdaGirisleri = liste;
+        cb();
+      });
     });
 }
 
@@ -4197,6 +4228,12 @@ function renderCapakKayitlari(c){
           });
         });
       });
+    },
+    function(id, cb){
+      mutasyonCagirUretim('deleteCapakGirisi', ['merkezi', id], 'Toplu silme: '+basliklar.capak+' satın alma', 'Satın Alma', false, function(liste, kuyruga){
+        if(!kuyruga) STATE.merkeziSatinAlmalar.capakGirisleri = liste;
+        cb();
+      });
     });
 
   function urEkranSatir(cu){
@@ -4245,6 +4282,12 @@ function renderCapakKayitlari(c){
           });
         });
       });
+    },
+    function(id, cb){
+      mutasyonCagirUretim('deleteCapakUretimi', [STATE.aktifBirimId, id], 'Toplu silme: '+basliklar.capak+' üretim kaydı', aktifBirimAdi(), false, function(liste, kuyruga){
+        if(!kuyruga) STATE.birimVeri.capakUretimleri = liste;
+        cb();
+      });
     });
 }
 
@@ -4271,6 +4314,7 @@ function renderBidonKayitlari(c, grup){
       '</select></div>'+
       '<button class="btn ghost" id="filt_refresh">Yenile (Filtreleri Temizle + Veriyi Tazele)</button>'+
     '</div>'+
+    '<div id="toplu_sil_bar"></div>'+
     '<div class="card"><div id="kayit_table"></div></div>';
 
   (document.getElementById('bu_pdf_btn')||{addEventListener:function(){}}).addEventListener('click', function(){
@@ -4308,6 +4352,18 @@ function renderBidonKayitlari(c, grup){
     if(u) list = list.filter(function(x){ return x.urun===u; });
     var box = document.getElementById('kayit_table'); if(!box) return;
     box.innerHTML = list.length===0 ? '<div class="empty"><b>Kayıt bulunamadı</b>Filtreleri temizleyin ya da yeni kayıt ekleyin.</div>' : renderBidonEntryTable(list);
+    var barBox = document.getElementById('toplu_sil_bar');
+    if(isAdmin() && list.length>0){
+      topluSecimBarKur(barBox, box, function(id, cb){
+        mutasyonCagirUretim('deleteEntry', [STATE.aktifBirimId, id], 'Toplu silme: '+grup.baslik+' kaydı', aktifBirimAdi(), false, function(entries, kuyruga){
+          if(!kuyruga){
+            STATE.birimVeri.entries = entries;
+            tumEntries = STATE.birimVeri.entries.filter(function(e){ return productSet[e.urun]; });
+          }
+          cb();
+        });
+      }, function(){ applyFilter(); });
+    } else if(barBox){ barBox.innerHTML = ''; }
     Array.prototype.forEach.call(box.querySelectorAll('[data-bu-edit]'), function(b){
       b.addEventListener('click', function(){
         var entry = STATE.birimVeri.entries.find(function(x){ return x.id===b.dataset.buEdit; });
@@ -4341,12 +4397,15 @@ function renderBidonKayitlari(c, grup){
 }
 
 function renderBidonEntryTable(list){
+  var secimModu = isAdmin() && !mobilSaltOkunurMu();
   var rows = list.slice().sort(function(a,b){ return b.tarih.localeCompare(a.tarih); }).map(function(e){
     var cst = computeBidonMaliyet(e, null, vardiyaGrupToplamKg(e, STATE.birimVeri, 'entries', 'kg'));
     var parasal = cst.maliyetGirildi
       ? '<td>'+fmt(cst.toplamMaliyet)+'</td><td>'+fmt(cst.birimMaliyet)+'</td>'
       : '<td colspan="2" style="text-align:center; color:var(--muted); font-family:\'Inter\',sans-serif;">Bu ayın maliyeti henüz girilmedi</td>';
-    return '<tr><td class="txt">'+escapeHtml(tarihGoster(e.tarih))+'</td>'+
+    return '<tr>'+
+      (secimModu ? '<td><input type="checkbox" class="satir-sec" data-sec-id="'+e.id+'"></td>' : '')+
+      '<td class="txt">'+escapeHtml(tarihGoster(e.tarih))+'</td>'+
       '<td class="txt">'+(e.vardiya==='gece'?'Gece':'Gündüz')+'</td>'+
       '<td class="txt"><span class="tag '+tagClassFor(e.urun)+'">'+escapeHtml(e.urun)+'</span></td>'+
       '<td>'+fmt(e.kg)+'</td>'+
@@ -4357,7 +4416,9 @@ function renderBidonEntryTable(list){
       '<td class="txt">'+escapeHtml(e.girenAd||'')+'</td>'+
       '<td style="white-space:nowrap;">'+(canMutate()?('<button class="btn ghost small" data-bu-edit="'+e.id+'">Düzenle</button> <button class="btn danger small" data-bu-del="'+e.id+'">Sil</button>'):'')+'</td></tr>';
   }).join('');
-  return '<table><thead><tr><th>Tarih</th><th>Vardiya</th><th>Bidon Tipi</th><th>Üretilen Adet</th><th>Fire Adedi</th><th>Kullanılan (kg)</th><th>Toplam Maliyet (TL)</th><th>TL/adet</th><th>Not</th><th>Giren</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+  return '<table><thead><tr>'+
+    (secimModu ? '<th><input type="checkbox" class="satir-tumunu-sec" title="Tümünü Seç"></th>' : '')+
+    '<th>Tarih</th><th>Vardiya</th><th>Bidon Tipi</th><th>Üretilen Adet</th><th>Fire Adedi</th><th>Kullanılan (kg)</th><th>Toplam Maliyet (TL)</th><th>TL/adet</th><th>Not</th><th>Giren</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function renderGranulKayitlari(c){
@@ -4527,6 +4588,12 @@ function renderGranulKayitlari(c){
             });
           });
         });
+      });
+    },
+    function(id, cb){
+      mutasyonCagirUretim('deleteGranulGirisi', ['merkezi', id], 'Toplu silme: Granül satın alma', 'Satın Alma', false, function(liste, kuyruga){
+        if(!kuyruga) STATE.merkeziSatinAlmalar.granulGirisleri = liste;
+        cb();
       });
     });
 }
