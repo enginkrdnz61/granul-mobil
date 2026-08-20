@@ -8768,16 +8768,155 @@ function renderParametreler(c){
 }
 
 
-// CTRL+F (Mac'te CMD+F) — programın HERHANGİ bir ekranında, tarayıcının kendi "sayfada bul"
-// davranışı yerine, uygulamanın kendi "Genel Arama" modalini (Müşteri/Personel/Ürün cinsi arama)
-// açar. Zaten AÇIK bir modal varsa (form, onay penceresi vb.) müdahale etmez — kullanıcı önce
-// onu kapatmalı, üst üste modal açılmasın diye.
+// ============================================================
+// SAYFA İÇİ ARAMA (CTRL+F / Mac: CMD+F) — Excel/tarayıcının "Bul" özelliği gibi: ekranda o an
+// GÖRÜNEN metni (yazı, sayı, karakter) tarar, eşleşen KISIMLARI sarı renkle vurgular, o anki
+// (aktif) eşleşmeyi turuncu ile ayırt eder ve otomatik kaydırır. VERİTABANI arama DEĞİLDİR
+// (bkz. genelAramaAc — üst çubuktaki "🔍 Ara" butonu, Müşteri/Personel/Ürün cinsi arar, AYRI bir
+// özelliktir, buna dokunulmadı).
+// ============================================================
+var SAYFA_ARAMA = { eslesmeler: [], aktifIndex: -1 };
+
+function sayfaAramaKoku(){
+  return document.getElementById('content') || document.getElementById('root');
+}
+
+// Önceki aramadan kalan TÜM <mark> etiketlerini kaldırıp metni ORİJİNAL haline döndürür.
+function sayfaIciAramaTemizle(){
+  var kok = sayfaAramaKoku(); if(!kok) return;
+  var marks = kok.querySelectorAll('mark.sayfa-arama-vurgu');
+  Array.prototype.forEach.call(marks, function(m){
+    var metin = document.createTextNode(m.textContent);
+    m.parentNode.replaceChild(metin, m);
+  });
+  kok.normalize(); // bitişik metin parçalarını tek bir düğümde birleştirir
+  SAYFA_ARAMA.eslesmeler = [];
+  SAYFA_ARAMA.aktifIndex = -1;
+}
+
+// Kökteki TÜM metin düğümlerini tarar, sorguyla eşleşen kısımları <mark> ile sarar. Input
+// alanlarının İÇİNDEKİ değerleri (kullanıcının yazdığı veriler) TARAMAZ — sadece görünen,
+// salt-okunur metni (etiketler, tablo hücreleri, başlıklar vb.) kapsar; bu, Excel'in "hücre
+// içeriğini bul"masına en yakın davranıştır ve DOM'u bozma riskini de ortadan kaldırır.
+function sayfaIciAramaTara(sorgu){
+  sayfaIciAramaTemizle();
+  if(!sorgu || sorgu.length < 1) return [];
+  var kok = sayfaAramaKoku(); if(!kok) return [];
+
+  var metinDugumleri = [];
+  var walker = document.createTreeWalker(kok, NodeFilter.SHOW_TEXT, {
+    acceptNode: function(node){
+      if(!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      var ebeveyn = node.parentNode;
+      if(!ebeveyn) return NodeFilter.FILTER_REJECT;
+      var etiket = ebeveyn.nodeName;
+      if(etiket==='SCRIPT' || etiket==='STYLE' || etiket==='MARK' || etiket==='INPUT' || etiket==='TEXTAREA' || etiket==='SELECT') return NodeFilter.FILTER_REJECT;
+      if(ebeveyn.closest && ebeveyn.closest('.sayfa-arama-bar')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var n;
+  while((n = walker.nextNode())) metinDugumleri.push(n);
+
+  var sorguKucuk = sorgu.toLocaleLowerCase('tr');
+  var eslesmeler = [];
+  metinDugumleri.forEach(function(dugum){
+    var metin = dugum.nodeValue;
+    var metinKucuk = metin.toLocaleLowerCase('tr');
+    var idx = metinKucuk.indexOf(sorguKucuk);
+    if(idx === -1) return;
+    var frag = document.createDocumentFragment();
+    var son = 0;
+    while(idx !== -1){
+      if(idx > son) frag.appendChild(document.createTextNode(metin.slice(son, idx)));
+      var mark = document.createElement('mark');
+      mark.className = 'sayfa-arama-vurgu';
+      mark.textContent = metin.slice(idx, idx+sorgu.length);
+      frag.appendChild(mark);
+      eslesmeler.push(mark);
+      son = idx + sorgu.length;
+      idx = metinKucuk.indexOf(sorguKucuk, son);
+    }
+    if(son < metin.length) frag.appendChild(document.createTextNode(metin.slice(son)));
+    dugum.parentNode.replaceChild(frag, dugum);
+  });
+  SAYFA_ARAMA.eslesmeler = eslesmeler;
+  SAYFA_ARAMA.aktifIndex = eslesmeler.length ? 0 : -1;
+  return eslesmeler;
+}
+
+function sayfaIciAramaAktifGoster(){
+  SAYFA_ARAMA.eslesmeler.forEach(function(m){ m.classList.remove('aktif'); });
+  if(SAYFA_ARAMA.aktifIndex < 0 || SAYFA_ARAMA.aktifIndex >= SAYFA_ARAMA.eslesmeler.length) return;
+  var aktif = SAYFA_ARAMA.eslesmeler[SAYFA_ARAMA.aktifIndex];
+  aktif.classList.add('aktif');
+  aktif.scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+function sayfaAramaBariGuncelle(){
+  var sayac = document.getElementById('__sab_sayac');
+  if(!sayac) return;
+  var toplam = SAYFA_ARAMA.eslesmeler.length;
+  sayac.textContent = toplam ? (SAYFA_ARAMA.aktifIndex+1)+'/'+toplam : (document.getElementById('__sab_input').value ? '0/0' : '');
+}
+
+function sayfaAramaBariKapat(){
+  var bar = document.getElementById('__sab_bar');
+  if(bar) bar.remove();
+  sayfaIciAramaTemizle();
+  document.removeEventListener('keydown', sayfaAramaEscDinle);
+}
+function sayfaAramaEscDinle(ev){ if(ev.key==='Escape') sayfaAramaBariKapat(); }
+
+function sayfaAramaBariAc(){
+  if(document.getElementById('__sab_bar')) { document.getElementById('__sab_input').focus(); return; }
+  var bar = document.createElement('div');
+  bar.id = '__sab_bar';
+  bar.className = 'sayfa-arama-bar';
+  bar.innerHTML =
+    '<input type="text" id="__sab_input" placeholder="Sayfada bul…">'+
+    '<span class="sab-sayac" id="__sab_sayac"></span>'+
+    '<button id="__sab_prev" title="Önceki (Shift+Enter)">▲</button>'+
+    '<button id="__sab_next" title="Sonraki (Enter)">▼</button>'+
+    '<button id="__sab_kapat" title="Kapat (Esc)">✕</button>';
+  document.body.appendChild(bar);
+  var input = document.getElementById('__sab_input');
+  setTimeout(function(){ input.focus(); }, 30);
+
+  function aramaTetikle(){
+    sayfaIciAramaTara(input.value);
+    sayfaIciAramaAktifGoster();
+    sayfaAramaBariGuncelle();
+  }
+  function sonraki(){
+    if(!SAYFA_ARAMA.eslesmeler.length) return;
+    SAYFA_ARAMA.aktifIndex = (SAYFA_ARAMA.aktifIndex+1) % SAYFA_ARAMA.eslesmeler.length;
+    sayfaIciAramaAktifGoster(); sayfaAramaBariGuncelle();
+  }
+  function onceki(){
+    if(!SAYFA_ARAMA.eslesmeler.length) return;
+    SAYFA_ARAMA.aktifIndex = (SAYFA_ARAMA.aktifIndex-1+SAYFA_ARAMA.eslesmeler.length) % SAYFA_ARAMA.eslesmeler.length;
+    sayfaIciAramaAktifGoster(); sayfaAramaBariGuncelle();
+  }
+  input.addEventListener('input', aramaTetikle);
+  input.addEventListener('keydown', function(ev){
+    if(ev.key === 'Enter'){ ev.preventDefault(); if(ev.shiftKey) onceki(); else sonraki(); }
+  });
+  document.getElementById('__sab_next').addEventListener('click', sonraki);
+  document.getElementById('__sab_prev').addEventListener('click', onceki);
+  document.getElementById('__sab_kapat').addEventListener('click', sayfaAramaBariKapat);
+  document.addEventListener('keydown', sayfaAramaEscDinle);
+}
+
+// CTRL+F (Mac'te CMD+F) — programın HERHANGİ bir ekranında, o an GÖRÜNEN sayfa içeriğinde
+// (Excel/tarayıcı "Bul" mantığıyla) hızlı arama çubuğunu açar. Zaten AÇIK bir form/onay
+// modali varsa dokunmaz — kullanıcı önce onu kapatmalı, üst üste pencere açılmasın diye.
 document.addEventListener('keydown', function(ev){
   var ctrlYaDaCmd = ev.ctrlKey || ev.metaKey;
   if(!ctrlYaDaCmd || ev.key !== 'f' && ev.key !== 'F') return;
   if(document.querySelector('.modal-bg')) return; // zaten açık bir modal varsa dokunma
   ev.preventDefault();
-  genelAramaAc();
+  sayfaAramaBariAc();
 });
 
 // Electron masaüstünde MOBIL_SALT_OKUNUR hiç tanımlanmadığı için otomatik başlar (eski davranış

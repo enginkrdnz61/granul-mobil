@@ -111,6 +111,18 @@
   .tag.admin{ background:rgba(217,83,79,.15); color:#e8807d; }
   .empty{ color:var(--muted); font-size:13.5px; padding:26px 10px; text-align:center; }
   .empty b{ color:var(--text); display:block; margin-bottom:4px; font-family:'Space Grotesk',sans-serif; }
+  /* Sayfa İçi Arama (Ctrl+F) — Excel/tarayıcı "Bul" mantığı: bulunan metin sarı vurgulu, o an
+     odaklanılan eşleşme turuncu vurgulu gösterilir. */
+  mark.sayfa-arama-vurgu{ background:#f5d90a; color:#111; padding:0 1px; border-radius:2px; }
+  mark.sayfa-arama-vurgu.aktif{ background:var(--amber); color:#111; box-shadow:0 0 0 2px var(--amber); }
+  .sayfa-arama-bar{ position:fixed; top:14px; right:14px; z-index:200; background:var(--panel);
+    border:1px solid var(--line); border-radius:10px; padding:8px 10px; display:flex; align-items:center;
+    gap:8px; box-shadow:0 8px 24px rgba(0,0,0,.4); }
+  .sayfa-arama-bar input{ width:200px; margin:0; }
+  .sayfa-arama-bar .sab-sayac{ font-size:12px; color:var(--muted); white-space:nowrap; min-width:52px; text-align:center; font-family:'JetBrains Mono',monospace; }
+  .sayfa-arama-bar button{ background:transparent; border:1px solid var(--line); color:var(--text);
+    border-radius:6px; width:28px; height:28px; cursor:pointer; font-size:13px; display:flex; align-items:center; justify-content:center; }
+  .sayfa-arama-bar button:hover{ background:var(--line); }
   .modal-bg{ position:fixed; inset:0; background:rgba(10,12,14,.6); display:flex; align-items:center;
     justify-content:center; z-index:50; padding:20px; }
   .modal{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
