@@ -102,12 +102,23 @@ function gmt3ZamanStr(d){
 // ISO "YYYY-MM-DD" -> "GG/AA/YYYY". Zaman damgası ("YYYY-MM-DDTHH:MM:SS...") verilirse saat de eklenir.
 // NOT: <input type="date"/"month"> alanları buna dahil değildir — onlar tarayıcı/Windows'un
 // kendi yerel ayarına göre gösterilir, JS ile değiştirilemez/değiştirilmemelidir.
+// SADECE tarih ("YYYY-MM-DD", saat YOK) alanları REGEX ile parse edilir — new Date() kullanmak
+// TEHLİKELİ olurdu (JS, saatsiz "YYYY-MM-DD" string'lerini UTC gece yarısı sayar; UTC'nin
+// GERİSİNDEKİ zaman dilimlerinde tarih bir gün geriye kayabilirdi). SAAT İÇEREN zaman damgaları
+// ("YYYY-MM-DDTHH:MM...", örn. toISOString() ile kaydedilmiş — HER ZAMAN UTC'dir) ise GERÇEK bir
+// Date nesnesi ile parse edilip kullanıcının YEREL saatine göre gösterilir — aksi halde (eski
+// hatalı davranışta olduğu gibi) UTC saati "yerel saat" sanılıp gösterilir, Türkiye'de (UTC+3)
+// 3 saatlik bir fark oluşurdu.
 function tarihGoster(isoTarihVeyaZaman){
   if(!isoTarihVeyaZaman || typeof isoTarihVeyaZaman !== 'string') return isoTarihVeyaZaman || '';
   var m = isoTarihVeyaZaman.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
   if(!m) return isoTarihVeyaZaman;
-  var tarihKismi = m[3]+'/'+m[2]+'/'+m[1];
-  return (m[4]!==undefined) ? (tarihKismi+' '+m[4]+':'+m[5]) : tarihKismi;
+  if(m[4] === undefined) return m[3]+'/'+m[2]+'/'+m[1]; // saat yok — güvenli regex yolu
+  var d = new Date(isoTarihVeyaZaman);
+  if(isNaN(d.getTime())) return m[3]+'/'+m[2]+'/'+m[1]+' '+m[4]+':'+m[5]; // parse başarısızsa eski davranışa düş
+  var gg = String(d.getDate()).padStart(2,'0'), aa = String(d.getMonth()+1).padStart(2,'0'), yyyy = d.getFullYear();
+  var ss = String(d.getHours()).padStart(2,'0'), dd = String(d.getMinutes()).padStart(2,'0');
+  return gg+'/'+aa+'/'+yyyy+' '+ss+':'+dd;
 }
 // Geriye dönük uyumluluk: eski adıyla çağıran yerler için (varsa) aynı fonksiyona yönlendirilir.
 function pdfTarihFormat(isoTarih){ return tarihGoster(isoTarih); }
@@ -182,7 +193,7 @@ function pdfDisaAktarPenceresiAc(opts){
       '<input type="checkbox" data-pdf-sutun="'+s.key+'" checked><span class="note" style="margin:0;">'+escapeHtml(s.label)+'</span></label>';
   }).join('');
   bg.innerHTML = '<div class="modal" style="max-width:420px; max-height:80vh; overflow-y:auto;">'+
-    '<h3>'+escapeHtml(opts.baslik)+' — PDF Dışa Aktar</h3>'+
+    '<h3>'+escapeHtml(opts.baslik)+' — Dışa Aktar</h3>'+
     (opts.tarihAlani ?
       '<div class="row">'+
         '<div class="field"><label>Başlangıç</label><input type="date" id="__pdf_start"></div>'+
@@ -193,6 +204,7 @@ function pdfDisaAktarPenceresiAc(opts){
     sutunlarHTML+
     '<div class="modal-actions">'+
       '<button class="btn ghost" id="__pdf_vazgec">Vazgeç</button>'+
+      '<button class="btn ghost" id="__xlsx_olustur">Excel (XLSX) Olarak İndir</button>'+
       '<button class="btn" id="__pdf_olustur">PDF Oluştur</button>'+
     '</div>'+
   '</div>';
@@ -200,11 +212,14 @@ function pdfDisaAktarPenceresiAc(opts){
   var close = function(){ bg.remove(); };
   bg.addEventListener('click', function(ev){ if(ev.target===bg) close(); });
   (document.getElementById('__pdf_vazgec')||{addEventListener:function(){}}).addEventListener('click', close);
-  (document.getElementById('__pdf_olustur')||{addEventListener:function(){}}).addEventListener('click', function(){
+
+  // Hem PDF hem Excel butonu İÇİN ORTAK hazırlık: seçilen sütunlara göre filtrelenmiş
+  // kayıtları, başlık aralığını ve özet satırlarını hesaplar.
+  function hazirlaVeri(){
     var secilenSutunlar = opts.sutunlar.filter(function(s){
       return document.querySelector('[data-pdf-sutun="'+s.key+'"]').checked;
     });
-    if(secilenSutunlar.length === 0){ alert('En az bir sütun seçmelisiniz.'); return; }
+    if(secilenSutunlar.length === 0){ alert('En az bir sütun seçmelisiniz.'); return null; }
     var kayitlar = opts.kayitlarGetir();
     var baslikAraligi;
     if(opts.tarihAlani){
@@ -216,18 +231,43 @@ function pdfDisaAktarPenceresiAc(opts){
     } else {
       baslikAraligi = tarihGoster(gmt3TarihStr(gmt3Simdi()))+' itibarıyla';
     }
-    if(kayitlar.length === 0){ alert('Seçilen aralıkta kayıt yok, dışa aktarılacak veri bulunamadı.'); return; }
-    var tabloBasliklari = secilenSutunlar.map(function(s){ return s.label; });
+    if(kayitlar.length === 0){ alert('Seçilen aralıkta kayıt yok, dışa aktarılacak veri bulunamadı.'); return null; }
+    return {secilenSutunlar:secilenSutunlar, kayitlar:kayitlar, baslikAraligi:baslikAraligi};
+  }
+
+  (document.getElementById('__pdf_olustur')||{addEventListener:function(){}}).addEventListener('click', function(){
+    var v = hazirlaVeri(); if(!v) return;
+    var tabloBasliklari = v.secilenSutunlar.map(function(s){ return s.label; });
     var satirHTML = function(k){
-      return '<tr>'+secilenSutunlar.map(function(s){
+      return '<tr>'+v.secilenSutunlar.map(function(s){
         var deger = (opts.tarihAlani && s.key === opts.tarihAlani) ? pdfTarihFormat(k[s.key]) : opts.satirDegeri(k, s.key);
         return '<td>'+escapeHtml(deger)+'</td>';
       }).join('')+'</tr>';
     };
-    var ozet = opts.ozetSatirlari ? opts.ozetSatirlari(kayitlar) : [{etiket:'Toplam Kayıt', deger:String(kayitlar.length)}];
-    document.getElementById('print-area').innerHTML = buildBasitPrintReportHTML(kayitlar, opts.baslik, baslikAraligi, ozet, tabloBasliklari, satirHTML);
+    var ozet = opts.ozetSatirlari ? opts.ozetSatirlari(v.kayitlar) : [{etiket:'Toplam Kayıt', deger:String(v.kayitlar.length)}];
+    document.getElementById('print-area').innerHTML = buildBasitPrintReportHTML(v.kayitlar, opts.baslik, v.baslikAraligi, ozet, tabloBasliklari, satirHTML);
     window.print();
     close();
+  });
+
+  (document.getElementById('__xlsx_olustur')||{addEventListener:function(){}}).addEventListener('click', function(){
+    var v = hazirlaVeri(); if(!v) return;
+    var btn = document.getElementById('__xlsx_olustur');
+    btn.disabled = true; btn.textContent = 'Hazırlanıyor…';
+    var basliklar = v.secilenSutunlar.map(function(s){ return s.label; });
+    var satirlar = v.kayitlar.map(function(k){
+      return v.secilenSutunlar.map(function(s){
+        return (opts.tarihAlani && s.key === opts.tarihAlani) ? pdfTarihFormat(k[s.key]) : opts.satirDegeri(k, s.key);
+      });
+    });
+    window.api.exportXlsx({baslik: opts.baslik, basliklar: basliklar, satirlar: satirlar}).then(function(sonuc){
+      btn.disabled = false; btn.textContent = 'Excel (XLSX) Olarak İndir';
+      if(sonuc && sonuc.iptal) return; // kullanıcı "Farklı Kaydet" diyaloğunu iptal etti
+      if(sonuc && sonuc.basarili){ showToast('Excel dosyası kaydedildi.'); close(); }
+    }).catch(function(err){
+      btn.disabled = false; btn.textContent = 'Excel (XLSX) Olarak İndir';
+      alert(err.message);
+    });
   });
 }
 
@@ -1718,19 +1758,22 @@ function renderGenelFabrikaStok(c){
         }
       } else {
         // Bu birimin KENDİ (merkeziden bağımsız) cins listesi ve KENDİ stoğu — kapatılmış (cinsAktif=false)
-        // kategoriler burada da gösterilmez.
+        // kategoriler burada da gösterilmez. "Diğer birim"ler (Şişirme, Enjeksiyon vb.) HER ZAMAN
+        // adet bazlı üretim yapar (bkz. computeBidonMaliyet) — bu yüzden Ürün Cinsleri (Hurda/
+        // Çapak/Granül core + ek kategoriler) stoğu "kg" DEĞİL "Adet" olarak gösterilir. Hammadde
+        // (girdi olarak tüketilen plastik/hammadde) GERÇEKTEN kg cinsindendir, o kısım DEĞİŞMEDİ.
         var kendiAktif = s.veri.cinsAktif;
         var kendiOzet = computeStokOzeti(s.veri, s.veri, {hurdaGirisleri:[], capakGirisleri:[], granulGirisleri:[]});
         if(kendiAktif.hurda){
-          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(s.veri.cinsBasliklari.hurda)+'</div>'+stokTablosuHTML(s.veri.hurdaCinsleri, kendiOzet.hurda, 'Stok (kg)')+'</div>';
+          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(s.veri.cinsBasliklari.hurda)+'</div>'+stokTablosuHTML(s.veri.hurdaCinsleri, kendiOzet.hurda, 'Stok (Adet)')+'</div>';
           s.veri.hurdaCinsleri.forEach(function(p){ duzKayitlar.push({birim:s.birim.ad, kategori:s.veri.cinsBasliklari.hurda, cins:p.ad, stok:kendiOzet.hurda[p.ad]||0}); });
         }
         if(kendiAktif.capak){
-          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(s.veri.cinsBasliklari.capak)+'</div>'+stokTablosuHTML(s.veri.capakCinsleri, kendiOzet.capak, 'Stok (kg)')+'</div>';
+          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(s.veri.cinsBasliklari.capak)+'</div>'+stokTablosuHTML(s.veri.capakCinsleri, kendiOzet.capak, 'Stok (Adet)')+'</div>';
           s.veri.capakCinsleri.forEach(function(p){ duzKayitlar.push({birim:s.birim.ad, kategori:s.veri.cinsBasliklari.capak, cins:p.ad, stok:kendiOzet.capak[p.ad]||0}); });
         }
         if(kendiAktif.granul){
-          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(s.veri.cinsBasliklari.granul)+'</div>'+stokTablosuHTML(s.veri.urunler, kendiOzet.granul, 'Stok (kg)')+'</div>';
+          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(s.veri.cinsBasliklari.granul)+'</div>'+stokTablosuHTML(s.veri.urunler, kendiOzet.granul, 'Stok (Adet)')+'</div>';
           s.veri.urunler.forEach(function(p){ duzKayitlar.push({birim:s.birim.ad, kategori:s.veri.cinsBasliklari.granul, cins:p.ad, stok:kendiOzet.granul[p.ad]||0}); });
         }
         // Kullanıcının serbestçe eklediği kategori sekmeleri (örn. "Vidalı Bidon") — bunlar
@@ -1738,10 +1781,11 @@ function renderGenelFabrikaStok(c){
         // burada HİÇ gösterilmiyordu (bug). "granul" (Ürün Cinsleri) stok haritasını paylaşırlar —
         // çünkü Bidon Üretimi kayıtları hep aynı tek "kg" stok alanına yazar.
         (s.veri.ekKategoriler||[]).forEach(function(ek){
-          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(ek.baslik)+'</div>'+stokTablosuHTML(ek.ogeler, kendiOzet.granul, 'Stok (kg)')+'</div>';
+          html += '<div><div class="note" style="margin-bottom:6px;">'+escapeHtml(ek.baslik)+'</div>'+stokTablosuHTML(ek.ogeler, kendiOzet.granul, 'Stok (Adet)')+'</div>';
           (ek.ogeler||[]).forEach(function(p){ duzKayitlar.push({birim:s.birim.ad, kategori:ek.baslik, cins:p.ad, stok:kendiOzet.granul[p.ad]||0}); });
         });
         // Hammadde: Ürün Cinsleri'nden TAMAMEN AYRI, kendi bağımsız stok haritası (computeHammaddeStoku).
+        // Bu GERÇEKTEN kg cinsindendir (üretimde tüketilen plastik/hammadde) — Adet DEĞİL.
         if((s.veri.hammaddeCinsleri||[]).length > 0){
           var hammaddeStok = computeHammaddeStoku(s.veri);
           html += '<div><div class="note" style="margin-bottom:6px;">Hammadde</div>'+stokTablosuHTML(s.veri.hammaddeCinsleri, hammaddeStok, 'Stok (kg)')+'</div>';

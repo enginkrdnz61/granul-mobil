@@ -125,7 +125,7 @@
     'deleteKullanici', 'deleteMakine', 'deleteMesaj', 'deleteMusteri', 'deleteMusteriFiyat', 'deleteMusteriSatisi', 'deletePersonel', 'deletePersonelMerkezi',
     'deleteUnvan', 'deleteUrun', 'emptyCopKutusu', 'markGeriBildirimDurum', 'markMesajlarOkundu', 'reorderBirim',
     'reorderCapakCinsi', 'reorderEkKategori', 'reorderEkKategoriOge', 'reorderHammaddeCinsi', 'reorderHurdaCinsi',
-    'reorderUrun', 'restoreCop', 'restoreDailyBackup', 'saveAylikKapanis', 'saveAylikFiyat', 'saveSettings', 'sendMesaj',
+    'exportXlsx', 'reorderUrun', 'restoreCop', 'restoreDailyBackup', 'saveAylikKapanis', 'saveAylikFiyat', 'saveSettings', 'sendMesaj',
     'setAnaUretimTuru', 'setCinsAktif', 'setCinsKaliciSil', 'setSatinAlimAktif', 'updateBirimAdi', 'updateCapakCinsi',
     'updateCapakCinsiGramaj', 'updateCapakGirisi', 'updateCapakSatisi', 'updateCapakUretimi', 'updateCariHareket',
     'updateCinsBasligi', 'updateEkKategoriBaslik', 'updateEkKategoriOge', 'updateEkKategoriOgeGramaj',
