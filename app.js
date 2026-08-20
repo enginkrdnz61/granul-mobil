@@ -903,45 +903,26 @@ function canMutate(){
   return isAdmin() || isMudur();
 }
 
-// Müdür bir ekleme/silme/değiştirme işlemi yaptığında, işlemi doğrudan uygulamak yerine
-// Yönetici onayına gönderir (Onay Bekleyenler kuyruğuna düşer). Yönetici ve Normal kullanıcı
-// için (Normal zaten çoğu mutasyon butonunu görmüyor) işlem her zamanki gibi anında uygulanır.
-// basariCB(sonuc, kuyrugaGitti) — kuyrugaGitti true ise sonuc yoktur, arayüz güncellenmemelidir.
+// Müdür ve Yönetici'nin TÜM ekleme/silme/değiştirme işlemleri artık HER ZAMAN doğrudan uygulanır
+// — hiçbir rol onaya düşmez (kullanıcı isteğiyle, "Onay Bekleyenler" mekanizması Müdür için
+// devre dışı bırakıldı; altyapı silinmedi, sadece hiçbir yerden tetiklenmiyor).
+// basariCB(sonuc, kuyrugaGitti) — kuyrugaGitti HER ZAMAN false'tur artık (bu parametre geriye
+// dönük uyumluluk için tutuldu, çağıran kodlarda değişiklik gerekmesin diye).
 function mutasyonCagir(fonksiyonAdi, argListesi, aciklama, birimAdi, basariCB, hataCB){
   var hata = hataCB || function(err){ alert(err.message); };
-  if(isMudur()){
-    window.api.addBekleyenIslem({ fonksiyon: fonksiyonAdi, argumanlar: argListesi, aciklama: aciklama, birimAdi: birimAdi || '' })
-      .then(function(liste){
-        STATE.bekleyenIslemler = liste;
-        showToast('İşlem onay için Yönetici\'ye gönderildi.');
-        if(basariCB) basariCB(null, true);
-      }).catch(hata);
-    return;
-  }
   window.api[fonksiyonAdi].apply(window.api, argListesi).then(function(sonuc){
     if(basariCB) basariCB(sonuc, false);
   }).catch(hata);
 }
 
-// Üretim/Satın Alma "Yeni Kayıt" akışları için ÖZEL kural (Granül Birimi, Çapak Üretim Birimi,
-// Şişirme Birimi/"diğer birim" ve Satın Alma'da kullanılır): standart mutasyonCagir'dan BİLEREK
-// farklıdır —
-//   - EKLEME (yeni kayıt): Yönetici/Müdür/Normal FARK ETMEKSİZİN her zaman DOĞRUDAN uygulanır,
-//     onaya hiç gitmez (kullanıcı isteğiyle).
-//   - DÜZENLEME/SİLME: Yönetici dışındaki HERKES (hem Müdür HEM Normal) için Onay Bekleyenler
-//     kuyruğuna düşer — standart mutasyonCagir'da Normal kullanıcı için bu hiç uygulanmazdı.
-// basariCB(sonuc, kuyrugaGitti) — kuyrugaGitti true ise sonuc yoktur, arayüz güncellenmemelidir.
+// Üretim/Satın Alma "Yeni Kayıt" akışları için (Granül Birimi, Çapak Üretim Birimi, Şişirme
+// Birimi/"diğer birim" ve Satın Alma'da kullanılır). ARTIK Yönetici/Müdür FARK ETMEKSİZİN her
+// işlem (ekleme, düzenleme, silme) doğrudan uygulanır — onay mekanizması hiçbir rol için
+// tetiklenmiyor (kullanıcı isteğiyle). `eklemeMi` parametresi geriye dönük uyumluluk için
+// tutuldu, artık davranışı etkilemiyor.
+// basariCB(sonuc, kuyrugaGitti) — kuyrugaGitti HER ZAMAN false'tur artık.
 function mutasyonCagirUretim(fonksiyonAdi, argListesi, aciklama, birimAdi, eklemeMi, basariCB, hataCB){
   var hata = hataCB || function(err){ alert(err.message); };
-  if(!isAdmin() && !eklemeMi){
-    window.api.addBekleyenIslem({ fonksiyon: fonksiyonAdi, argumanlar: argListesi, aciklama: aciklama, birimAdi: birimAdi || '' })
-      .then(function(liste){
-        STATE.bekleyenIslemler = liste;
-        showToast('İşlem onay için Yönetici\'ye gönderildi.');
-        if(basariCB) basariCB(null, true);
-      }).catch(hata);
-    return;
-  }
   window.api[fonksiyonAdi].apply(window.api, argListesi).then(function(sonuc){
     if(basariCB) basariCB(sonuc, false);
   }).catch(hata);
@@ -8786,6 +8767,18 @@ function renderParametreler(c){
   });
 }
 
+
+// CTRL+F (Mac'te CMD+F) — programın HERHANGİ bir ekranında, tarayıcının kendi "sayfada bul"
+// davranışı yerine, uygulamanın kendi "Genel Arama" modalini (Müşteri/Personel/Ürün cinsi arama)
+// açar. Zaten AÇIK bir modal varsa (form, onay penceresi vb.) müdahale etmez — kullanıcı önce
+// onu kapatmalı, üst üste modal açılmasın diye.
+document.addEventListener('keydown', function(ev){
+  var ctrlYaDaCmd = ev.ctrlKey || ev.metaKey;
+  if(!ctrlYaDaCmd || ev.key !== 'f' && ev.key !== 'F') return;
+  if(document.querySelector('.modal-bg')) return; // zaten açık bir modal varsa dokunma
+  ev.preventDefault();
+  genelAramaAc();
+});
 
 // Electron masaüstünde MOBIL_SALT_OKUNUR hiç tanımlanmadığı için otomatik başlar (eski davranış
 // aynen korunur). Mobil/PWA girişinde ise Google Drive'dan veri indirilene kadar boot()
